@@ -21,8 +21,12 @@
   "engines": {
     "node": ">=18"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
+    "prepublishOnly": "npm run build",
     "start": "node build/index.js",
     "dev": "tsc --watch",
     "inspect": "npx @modelcontextprotocol/inspector node build/index.js"
