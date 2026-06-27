@@ -1,12 +1,12 @@
 {
   "name": "@ragionex/memory-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for Ragionex Memory - persistent memory for AI agents.",
   "license": "MIT",
   "homepage": "https://ragionex.com/memory/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ragionex/memory-mcp.git"
+    "url": "git+https://github.com/ragionex/memory-mcp.git"
   },
   "type": "module",
   "main": "build/index.js",

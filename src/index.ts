@@ -15,28 +15,22 @@ import { z } from "zod";
 import { MAX_SUBQUERIES_MEMORY, mergeRoundRobin } from "./multi-query.js";
 
 // --- Subcommands (run-and-exit before booting the MCP server) ----------------
-// If the binary is invoked with a subcommand like `init-claude-code`, we do
-// that one-shot task and exit before starting stdio transport (no MCP server,
-// so RAGIONEX_MEMORY_API_KEY is NOT required for these subcommands).
+// `init` installs/refreshes the priority rule into every detected agent's global
+// rules file and exits before starting the stdio transport (no MCP server, so
+// RAGIONEX_MEMORY_API_KEY is NOT required for this subcommand).
 const subcommand = process.argv[2];
-if (subcommand === "init-claude-code") {
-  const { runInit } = await import("./init-claude-code.js");
+if (subcommand === "init") {
+  const { runInit } = await import("./init.js");
   await runInit(process.argv.slice(3));
   process.exit(0);
 }
 
-// Boot-time auto-refresh of the priority rule in user/project CLAUDE.md.
-// Strict marker match -> refresh if drifted from the shipped RULE_BODY.
-// Modified markers -> warn (user opted out by editing markers).
-// No markers / read errors -> silent skip. Never crashes the server.
-//
-// Also surface a one-line notice when the MCP appears to be installed only at
-// project scope (Claude Code's .mcp.json) - cross-project memory needs a
-// user-scope install.
+// Boot-time cross-agent priority-rule sync. For each installed + enabled agent,
+// ensures its global rules file holds the current rule block (create / refresh /
+// skip-if-user-modified-markers). Server-side; best-effort; never crashes boot.
 {
-  const { autoRefreshOnBoot, scopeWarningOnBoot } = await import("./init-claude-code.js");
+  const { autoRefreshOnBoot } = await import("./init.js");
   autoRefreshOnBoot();
-  scopeWarningOnBoot();
 }
 
 const API_BASE = process.env.RAGIONEX_API_BASE ?? "https://api.ragionex.com";
@@ -189,13 +183,12 @@ function assertDateRangeOrder(
 async function memorySearchSingle(
   query: string,
   results: number,
-  scope: "segment" | "full",
   project?: string,
   start_date?: string,
   end_date?: string
 ): Promise<{ success: boolean; results: unknown[] }> {
   try {
-    const body: Record<string, unknown> = { query, results, scope };
+    const body: Record<string, unknown> = { query, results };
     if (project) body.project = project;
     if (start_date) body.start_date = start_date;
     if (end_date) body.end_date = end_date;
@@ -243,7 +236,7 @@ const SERVER_INSTRUCTIONS = [
 const server = new McpServer(
   {
     name: "ragionex-memory-mcp",
-    version: "0.1.0",
+    version: "0.2.0",
   },
   {
     instructions: SERVER_INSTRUCTIONS,
@@ -274,7 +267,7 @@ server.registerTool(
         .max(50)
         .regex(/^[a-z0-9-]{1,50}$/)
         .describe(
-          "Project label. Lowercase alphanumeric and hyphens only (e.g. 'notes', 'design-system', 'client-acme'). Used to scope searches."
+          "Project label, slugified `^[a-z0-9-]+$`. Only two kinds: the current project's folder name (cwd basename) for facts about this codebase, or 'general' for facts about the user or all projects. See the priority rule for details. Do not invent other labels and do not use the full path."
         ),
     },
     annotations: {
@@ -311,7 +304,7 @@ server.registerTool(
   {
     title: "Search memories",
     description:
-      "Search memories in ragionex-memory-mcp by semantic similarity. Phrase every part of `query` as a full QUESTION (not keywords), in English, no time vocabulary - full questions match far better than keyword fragments. ALWAYS send 2-3 question phrasings of the topic joined by ';' (merged + deduped, so extras only help) - do not send a single keyword. Other params: `scope` ('segment' returns matching part / 'full' returns whole memory), optional `project`, optional `start_date` / `end_date` (ISO 8601 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ'). The priority rule (in CLAUDE.md, injected by the server) defines full RECALL semantics: the 2-3-question rule, the EXACT-vs-VAGUE date rule, time-stays-out-of-query. For a time window with no topic, use ragionex_list_memories instead. Returns ranked matches.",
+      "Search memories in ragionex-memory-mcp by semantic similarity. Phrase every part of `query` as a full QUESTION (not keywords), in English, no time vocabulary - full questions match far better than keyword fragments. ALWAYS send 2-3 question phrasings of the topic joined by ';' (merged + deduped, so extras only help) - do not send a single keyword. Other params: optional `project`, optional `start_date` / `end_date` (ISO 8601 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ'). The priority rule (in CLAUDE.md, injected by the server) defines full RECALL semantics: the 2-3-question rule, the EXACT-vs-VAGUE date rule, time-stays-out-of-query. For a time window with no topic, use ragionex_list_memories instead. Returns ranked matches.",
     inputSchema: {
       query: z
         .string()
@@ -329,11 +322,6 @@ server.registerTool(
         .describe(
           "Maximum number of results to return PER sub-question. Default 10 is a good general fit; raise for broader recall, lower for tight focused recall. In multi-query mode each part fetches this many results before round-robin merge + dedup."
         ),
-      scope: z
-        .enum(["segment", "full"])
-        .describe(
-          "'segment' returns just the matching part of each memory (faster, lower token cost, focused). 'full' returns the complete original memory content (more context, larger payload). Prefer 'segment' unless the agent specifically needs surrounding context."
-        ),
       project: z
         .string()
         .min(1)
@@ -341,7 +329,7 @@ server.registerTool(
         .regex(/^[a-z0-9-]{1,50}$/)
         .optional()
         .describe(
-          "Optional project filter. Omit to search across all projects. When the conversation context implies a single project, setting this dramatically improves precision."
+          "Optional project filter - a precision tool, not a generic narrowing knob (same logic as the date filter). Set it ONLY when the question is explicitly project-scoped: the user names a project, or asks about the current codebase's own code or decisions. For vague, general, or personal questions (the user's preferences, identity, anything spanning projects), OMIT it and search across all projects - an auto-guessed project filter hides relevant matches in 'general' and other projects, exactly like a guessed date range. Never pass 'general' as the filter: it is a save label, not a search scope, and would exclude every other project."
         ),
       start_date: dateParam(
         "Optional inclusive lower bound for memory creation date. ISO 8601: 'YYYY-MM-DD' (start-of-day UTC) or 'YYYY-MM-DDTHH:MM:SSZ'. Omit for no lower bound. Set ONLY for exact, calendar-anchored time references."
@@ -357,7 +345,7 @@ server.registerTool(
       openWorldHint: true,
     },
   },
-  async ({ query, results, scope, project, start_date, end_date }) => {
+  async ({ query, results, project, start_date, end_date }) => {
     assertDateRangeOrder(start_date, end_date);
     // Split on ';', trim, drop empties. AI is told to use this separator
     // for independent sub-topics in the tool description above.
@@ -378,7 +366,7 @@ server.registerTool(
     // real input rather than silently mangling it.
     if (parts.length <= 1) {
       const single = parts.length === 1 ? parts[0] : query;
-      const data = await memorySearchSingle(single, results, scope, project, start_date, end_date);
+      const data = await memorySearchSingle(single, results, project, start_date, end_date);
       const lines = (data.results || []).map((r, i) => {
         const obj = r as Record<string, unknown>;
         return `[${i + 1}] ${JSON.stringify(obj)}`;
@@ -401,7 +389,7 @@ server.registerTool(
       `[ragionex-memory-mcp] Multi-query split: ${parts.length} parts`
     );
     const subResults = await Promise.all(
-      parts.map((p) => memorySearchSingle(p, results, scope, project, start_date, end_date))
+      parts.map((p) => memorySearchSingle(p, results, project, start_date, end_date))
     );
     const perPartLists: unknown[][] = subResults.map((r) => r.results || []);
     const merged = mergeRoundRobin(perPartLists);
@@ -497,7 +485,7 @@ server.registerTool(
   {
     title: "View full memory content",
     description:
-      "Retrieve full original content for one or more memory IDs. Use this when ragionex_list_memories or ragionex_recall_memory returned a preview and you need the complete content. After a scope='segment' recall, pass the returned id here to read that memory's full content. Non-owned IDs are silently skipped.",
+      "Retrieve full original content for one or more memory IDs. Use this when ragionex_list_memories or ragionex_recall_memory returned a preview and you need the complete content. Non-owned IDs are silently skipped.",
     inputSchema: {
       ids: z
         .array(z.string().min(1).max(14))

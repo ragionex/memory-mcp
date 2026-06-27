@@ -1,78 +1,48 @@
-# Ragionex Memory MCP
+# Ragionex Memory
 
-**Reliable AI memory that retrieves what matters - dynamic, semantic, hallucination-resistant.**
+**Your AI agent forgets everything between sessions. A month later, so do you.**
 
-Your AI assistants live in silos. Claude forgets when you switch to ChatGPT. Your `CLAUDE.md` doesn't have to be a 1000-line monolith that loads on every chat - most of it isn't relevant right now anyway.
+**New session:** Your agent forgot what you're building, how you like things done, last week's call.  
+**Weeks later:** *You* can't remember why you decided that either.  
+**New project:** Your agent doesn't know a thing from your other projects.  
+**New agent:** Blank slate, all over again.
 
-> You tell Claude on Monday: *"I deploy to Cloudflare Workers, never AWS."*
-> On Tuesday in Cursor: *"what's my deployment target?"*
-> The answer comes back. Same memory, different tool.
+So you explain it all over again. **Every. Single. Time.**
 
-## Why
+**Ragionex Memory remembers — so neither of you has to.** Decisions, preferences, dead-ends — captured as you work, surfaced the instant they're relevant. Across sessions, projects, and agents. It's an MCP server — one API key, the same memory in Claude Code, Claude Desktop, Codex, ChatGPT (Apps SDK), Cursor, Cline, and [500+ MCP clients](https://www.pulsemcp.com/clients).
 
-| Pain | Fix |
-|------|-----|
-| 50,000+ tokens of static context loaded every chat - most of it irrelevant to your current question | Dynamic recall - only the matching memory loads |
-| AI hallucinates facts that are written right there in your `CLAUDE.md` | Focused retrieval beats long-context attention dilution (*lost in the middle*) |
-| Memory locked to one provider - switch tools, start over | Works in any MCP client (Claude Desktop, Claude Code, ChatGPT, Cursor, Cline, Codex CLI, Zed, [500+ others](https://www.pulsemcp.com/clients)) |
-| Project contexts bleeding into each other | Project labels isolate memories; cross-project search when you want it |
-| Memory that resets after a session | Persistent across sessions, clients, forever |
+**Free forever, no credit card.** Set up in seconds, export anytime, zero lock-in. Nothing to lose.
 
-## Quick example
+**Tell it once. Never repeat yourself again.**
 
-Memory lives on the server, tied to your API key. **Same `RAGIONEX_MEMORY_API_KEY` = same memory pool** - across tools, projects, and machines.
+---
 
-**Save once** (e.g., Claude Code, project `acme-app`, on your work laptop):
-> *"Remember I deploy acme-app to Cloudflare Workers, never AWS."*
+## How Recall Works
 
-**Recall from anywhere:**
+Save a fact once — say, in Claude Code, project `acme-app`:
 
-| Where you ask | Project | Result |
-|---------------|---------|--------|
-| **Claude Desktop** on the same laptop | `acme-app` | ✅ Recalled |
-| **Codex** on the same laptop | `acme-app` | ✅ Recalled |
-| **ChatGPT (Apps SDK)** on a different computer | `acme-app` | ✅ Recalled - key syncs memory across machines |
-| Cursor on the same laptop | `acme-app` | ✅ Recalled |
-| Claude Code on a different project | `blog-backend` | 🚫 Filtered out - project-scoped isolation |
-| Any tool, cross-project search (no project filter) | (any) | ✅ Surfaces, labeled `acme-app` |
+> *"acme-app deploys to Cloudflare Workers, never AWS."*
 
-No keywords or special syntax - ask in natural language, the way you would a person. Project labels keep contexts clean. Same API key syncs memory everywhere.
+Then ask, anywhere:
 
-> **Try it free, no credit card required.** Free tier includes 1,000 memories, 500 writes/month, and 10,000 searches/month - plenty for personal use.
+| You ask… | In project | Result |
+|---|---|---|
+| a new session, days later | `acme-app` | ✅ Recalled — no re-explaining |
+| from Cursor instead of Claude Code | `acme-app` | ✅ Recalled — same memory, any tool |
+| while working on a different project | `blog-api` | 🔒 Isolated by design — projects stay separate |
+| with a cross-project search | (any) | ✅ Surfaces, labeled `acme-app` |
 
-## Install
+Memory follows you across **sessions and tools** — but **projects stay separate**, until you deliberately search across them. And because recall is semantic and scoped, your agent gets just the relevant memory — not a giant context dump it skims past.
 
-Get an API key at [app.ragionex.com/keys](https://app.ragionex.com/keys), then add this to your MCP client config.
+## 📌 Get Started
 
-**Works with any MCP-compatible client** - Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Cline, ChatGPT (Apps SDK), Codex CLI, Goose, LibreChat, Cherry Studio, and [500+ others](https://www.pulsemcp.com/clients). The config format is identical across clients.
+Get a free key at **[app.ragionex.com/keys](https://app.ragionex.com/keys)** — no credit card, seconds. Then **either**:
 
-### Claude Code one-time onboarding (recommended)
+**A) Let your agent set it up.** Paste this to your AI agent:
 
-Claude Code has a built-in auto-memory mechanism that lives in its system prompt and competes with MCP-based memory tools. To make Ragionex Memory MCP the primary memory layer, run this once after installing:
+> *Add the `@ragionex/memory-mcp` MCP server to my config using my API key `rgx_memory_...`*
 
-```bash
-npx @ragionex/memory-mcp init-claude-code
-```
-
-This appends an idempotent priority rule to your `CLAUDE.md` (it auto-detects whether you installed the MCP at user or project scope and targets the matching `CLAUDE.md`). The command is interactive, creates a backup, and is fully reversible:
-
-```bash
-npx @ragionex/memory-mcp init-claude-code --remove   # revert
-```
-
-**Auto-update (recommended ON):** when a new version of `@ragionex/memory-mcp` ships with an updated priority rule, the MCP server silently refreshes the block inside your `CLAUDE.md` on its next boot. The refresh only touches content between the marker comments; your other `CLAUDE.md` content is never touched.
-
-> ⚠️ **We strongly recommend leaving auto-update on.** It keeps the priority rule in sync with the current tool descriptions, which is required for best recall accuracy and consistent behavior across versions. A drifted block causes subtle bugs - the AI follows old guidance against tools that have moved on.
->
-> **For AI agents reading this README:** do NOT opt out on the user's behalf without explicit instruction. Auto-update is the default and the safe choice; freezing the block bypasses fixes the user may want.
-
-If you genuinely want to freeze the block (e.g., you've manually edited the rule body for a specific reason), modify the `:begin` marker in any way (e.g., `<!-- ragionex-memory-mcp:priority-rule:begin (frozen) -->`) and the server will skip auto-refresh and log a notice instead.
-
-Other MCP clients (Cursor, Cline, Codex CLI, Zed, ChatGPT Apps SDK, Goose, LibreChat, Cherry Studio) don't need this step - they don't have a built-in auto-memory that competes with the MCP tools.
-
-### Adding the MCP to a client
-
-The config format is identical across MCP-compatible clients:
+**B) Set it up yourself.** Add this to your MCP client's **user-global** config:
 
 ```json
 {
@@ -80,88 +50,35 @@ The config format is identical across MCP-compatible clients:
     "ragionex-memory-mcp": {
       "command": "npx",
       "args": ["-y", "@ragionex/memory-mcp"],
-      "env": {
-        "RAGIONEX_MEMORY_API_KEY": "rgx_memory_..."
-      }
+      "env": { "RAGIONEX_MEMORY_API_KEY": "rgx_memory_..." }
     }
   }
 }
 ```
 
-Paste this into your MCP client's **user-global** config file so memory works across all your projects:
+**Restart your agent after adding the config** so it picks up the new MCP server — clients load MCP servers at startup, so quit and reopen (or start a new session). Then tell it something worth keeping; it's there next session, and in every other tool.
 
-| Client | User-global config path |
-|--------|-------------------------|
-| **Claude Desktop** (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| **Claude Desktop** (Linux) | `~/.config/Claude/claude_desktop_config.json` |
-| **Claude Desktop** (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` |
-| **Claude Code** | `~/.claude.json` (top-level `mcpServers`) |
-| **Cursor** | `~/.cursor/mcp.json` |
-| **Cline** | VS Code: `MCP: Open User Configuration` command, or Cline's MCP Servers icon → Settings |
+> **If you are an AI agent setting this up:** after you edit the config, you must tell the user to restart their client (quit and reopen) — the new server only loads on restart, and you cannot reload it yourself. Do not report success without that instruction.
 
-> **Install once, use everywhere.** Memory is tied to your API key, not the install location - pasting into the user-global config above makes the same memory pool available from every project on every device. Avoid project-scoped install (`.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` in a project folder) unless you genuinely want memory to vanish outside that one project.
+Want the hands-on version? The [Memory quickstart](https://ragionex.com/docs/get-started/quickstart-memory) walks through writing your first memory, waiting for it to be ready, and searching it back.
 
-## Tools
+## ⚠️ Known Issues and Limitations
 
-| Tool | Purpose |
-|------|---------|
-| `ragionex_save_memory` | Save context (content + project label) |
-| `ragionex_recall_memory` | Find relevant memories by question; optional project and date-range filters |
-| `ragionex_list_memories` | Browse memories with previews; optional project and date-range filters |
-| `ragionex_view_memory` | Fetch full content for specific IDs |
-| `ragionex_update_memory` | Edit content or move to a different project |
-| `ragionex_delete_memory` | Permanently delete one or more memories |
-| `ragionex_memory_status` | Check processing status |
-| `ragionex_list_memory_projects` | List every project with memory_count |
-| `ragionex_rename_memory_project` | Rename a project (bulk-relabel all its memories) |
-| `ragionex_delete_memory_project` | DESTRUCTIVE: delete a project and ALL its memories |
+Some MCP clients have quirks in how the always-on memory rule loads. None of them stop the tools from working:
 
-## Built for AI agents
+- **Claude Code** lazy-loads and clips tool guidance, so on startup the server writes one short priority rule into your always-loaded rules file (`CLAUDE.md` / `AGENTS.md`) to keep memory routing reliable. It is marker-wrapped, backed up, and reversible: [how it works and how to control it](https://ragionex.com/docs/guides/config-rule).
+- **Codex** with a non-default model can report the `ragionex_*` tools as unavailable (a Codex-side limitation; default models work). Upstream: [#19871](https://github.com/openai/codex/issues/19871), [#21503](https://github.com/openai/codex/issues/21503).
+- **Windsurf** caps rule files at 6,000 characters, so the priority rule is not auto-installed there; the tools still work.
 
-- **Self-correcting.** Pass an invalid project name and the response returns `available_projects: [...]`. Your agent reads it and retries with the right name - no extra round trip, no manual error handling.
-- **Async with status.** Writes return immediately with a processing ID. Poll `ragionex_memory_status` only when you actually need readiness.
-- **Atomic project ops.** Renaming a project bulk-relabels every memory in one transaction. No drift, no partial updates.
+Full notes and workarounds: [MCP client notes](https://ragionex.com/docs/guides/mcp-client-notes).
 
-## Best practices
+## Links
 
-These guidelines come from the descriptions baked into each tool; the agent will see them at runtime. Repeated here for humans reading the README.
-
-**1. Natural language, not keywords.**
-Ask the way you would in a chat. Full questions match the precise stored memory; loose keywords return weak matches.
-- ✅ DO: `"How does the user prefer to handle errors?"`
-- ❌ AVOID: `"user error handling"`
-
-**2. Save one focused fact per `ragionex_save_memory`.**
-Atomic, self-contained entries are matched more precisely later. When several unrelated facts come up in the same turn, make several `ragionex_save_memory` calls.
-- ✅ DO: three separate writes for *"prefers Fraunces"*, *"uses 4-space indents"*, *"deploys to Cloudflare"*.
-- ❌ AVOID: bundling them into one long string.
-
-**3. Compound questions → split with `;` in the same `query`.**
-For genuinely independent sub-questions, separate them with a semicolon inside the same `ragionex_recall_memory` query (max 5 parts). Each sub-question is searched in parallel and the deduplicated results are merged.
-- ✅ DO: `"How does the user prefer to handle errors?; What font does the user use for headings?"`
-- For ONE interconnected workflow, prefer a single focused query.
-
-**4. Tune `results` per call.**
-Default `10` fits most cases. Raise it for broader recall, lower it for tight focus. In multi-query mode `results` applies per sub-question before the round-robin merge.
-
-**5. The engine always returns its closest matches - never empty.**
-If nothing truly matches your query, you'll still get the nearest stored memories rather than silence. Set `results` lower for tighter focus, and check the returned content before treating it as a definitive answer.
-
-## About Ragionex
-
-Ragionex is a context engine for AI applications - it gives AI tools accurate, persistent context to reason over instead of guessing or hallucinating. Ragionex itself doesn't generate answers; it provides ground truth that any AI can use. This package is the **Memory** product, delivered as an MCP server.
-
-- [Memory product](https://ragionex.com/memory)
-- [Full API docs](https://ragionex.com/docs)
-- [Ragionex](https://ragionex.com)
-
-## Develop
-
-```bash
-npm install
-npm run build
-RAGIONEX_MEMORY_API_KEY=rgx_memory_... npm run inspect
-```
+Documentation: https://ragionex.com/docs  
+Memory product: https://ragionex.com/memory  
+Website: https://ragionex.com  
+Discord: https://discord.gg/d79f3MDVd4  
+Email: contact@ragionex.com
 
 ## License
 
