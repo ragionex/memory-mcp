@@ -13,6 +13,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { MAX_SUBQUERIES_MEMORY, mergeRoundRobin } from "./multi-query.js";
+import {
+  configureOfflineQueue,
+  enqueuePendingMemory,
+  triggerFlush,
+} from "./offline-queue.js";
 
 // --- Subcommands (run-and-exit before booting the MCP server) ----------------
 // `init` installs/refreshes the priority rule into every detected agent's global
@@ -55,6 +60,18 @@ interface RequestOpts {
   body?: unknown;
 }
 
+/** Error thrown by api(). `status` is the HTTP status code, or undefined for
+ * network-level failures (DNS, refused connection, timeout) - callers use it
+ * to tell "service unreachable" (no status / 5xx) apart from request errors
+ * (4xx). */
+class ApiError extends Error {
+  readonly status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function api<T>(opts: RequestOpts): Promise<T> {
   const url = `${API_BASE}${opts.path}`;
   const init: RequestInit = {
@@ -74,7 +91,7 @@ async function api<T>(opts: RequestOpts): Promise<T> {
     res = await fetch(url, init);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    throw new ApiError(
       `Network error reaching ${url}: ${msg}. Check internet connection or RAGIONEX_API_BASE override.`
     );
   }
@@ -92,17 +109,26 @@ async function api<T>(opts: RequestOpts): Promise<T> {
         ? String((payload as { error: unknown }).error)
         : res.statusText;
     if (res.status === 401 || res.status === 403) {
-      throw new Error(
-        `Auth failed (${res.status}): ${errMsg}. Verify RAGIONEX_MEMORY_API_KEY is correct and not revoked.`
+      throw new ApiError(
+        `Auth failed (${res.status}): ${errMsg}. Verify RAGIONEX_MEMORY_API_KEY is correct and not revoked.`,
+        res.status
       );
+    }
+    if (res.status === 402) {
+      throw new ApiError(`Plan limit reached (402): ${errMsg}`, res.status);
     }
     if (res.status === 429) {
-      throw new Error(
-        `Rate limit hit (429): ${errMsg}. Wait and retry, or upgrade your plan at https://ragionex.com/pricing/`
+      throw new ApiError(
+        `Rate limit hit (429): ${errMsg}. Wait and retry, or upgrade your plan at https://ragionex.com/pricing/`,
+        res.status
       );
     }
-    throw new Error(`API error ${res.status}: ${errMsg}`);
+    throw new ApiError(`API error ${res.status}: ${errMsg}`, res.status);
   }
+
+  // Service is reachable - opportunistically sync any offline-queued saves
+  // (no-op when the queue is empty or a flush is already running).
+  triggerFlush();
 
   return payload as T;
 }
@@ -218,25 +244,25 @@ async function memorySearchSingle(
 // Claude Code truncates this at ~2KB; keep it tight and put critical
 // guidance near the start.
 const SERVER_INSTRUCTIONS = [
-  "Ragionex Memory MCP - cross-client persistent memory for AI assistants. Tools: save / recall / list / view / update / delete memories plus project management. Memory is keyed to the user's API key and accessible from any MCP client (Claude Desktop, Claude Code, Cursor, Cline, Codex, ChatGPT Apps SDK, Zed).",
+  "Ragionex Memory MCP - the user's persistent memory across ALL their AI tools. Tools (prefix ragionex_): save / recall / list / view / update / delete memories, memory status, and project management.",
   "",
-  "When to use: any time the user signals persistent context - 'remember', 'save this', 'note that', 'don't forget', 'recall what I said', 'what do you know about me', or asks about prior decisions / preferences. Built-in single-client memory features are a secondary copy at best; ragionex-memory-mcp is the authoritative cross-client store.",
+  "Use on any persistent-context signal: 'remember', 'save this', 'note that', 'recall what I said', 'what do you know about me', or questions about prior decisions/preferences. This store is authoritative; client-local memory is secondary.",
   "",
-  "Language rule: tool arguments (`query`, `content`, `project`) MUST be English (memories are indexed in English). Translate the user's intent first. Reply to the user in their conversation language.",
+  "Arguments (query, content, project) always in English; reply in the user's language.",
   "",
-  "Replacement signals ('now', 'instead', 'switched to', 'no longer', non-English equivalents) -> call ragionex_recall_memory FIRST to find the prior memory, then ragionex_update_memory or ragionex_delete_memory. Do not save a new memory that contradicts an existing one.",
+  "Replacement signals ('now', 'instead', 'switched to', 'no longer') -> recall FIRST, then update or delete the old memory. Atomic saves: N facts = N save calls.",
   "",
-  "Atomic save: N distinct facts = N separate ragionex_save_memory calls (delete/update operate at memory-ID level; bundling = collateral data loss).",
+  "Recall queries: 2-3 full question phrasings joined by ';', never bare keywords, never time words. No topic, only browsing or a time window -> list_memories. Dates only for exact calendar references ('last week', 'in April'), never vague ('recently').",
   "",
-  "Recall vs list: topic present ('what did I say about X?') -> ragionex_recall_memory; ALWAYS phrase the query as 2-3 full QUESTIONS of the topic split by ';' (full questions match far better than keywords; merge+dedup makes extras free). Time window, NO topic ('what did I save last week?') -> ragionex_list_memories (browse). Both take optional start_date / end_date - set ONLY for exact calendar-anchored times ('last week', 'in April', '2026-04-15'); never for vague time ('recently'). Time NEVER appears in the `query` field of recall_memory.",
+  "On empty recall: retry once without filters; then say it is not saved and offer to save it - never guess.",
   "",
-  "See individual tool descriptions for parameter-formation rules (project label inference, date-range filter, etc.).",
+  "Tool descriptions carry parameter details; the priority rule (in the user's rules file) is canonical.",
 ].join("\n");
 
 const server = new McpServer(
   {
     name: "ragionex-memory-mcp",
-    version: "0.2.0",
+    version: "0.3.0",
   },
   {
     instructions: SERVER_INSTRUCTIONS,
@@ -252,7 +278,7 @@ server.registerTool(
   {
     title: "Save a memory",
     description:
-      "Save a durable fact, preference, or decision to ragionex-memory-mcp (cross-client persistent memory: Claude Desktop, Claude Code, Cursor, Cline, Codex, ChatGPT, Zed). Use for content that should persist across sessions and AI tools. Parameters: `content` (English; memories are indexed in English), `project` (slugified `^[a-z0-9-]+$`, e.g. 'general', 'acme-app'). The priority rule (in CLAUDE.md, injected by the server) defines the full write semantics: PROJECT LABEL inference, WHAT TO SAVE vs SKIP signals, LIFECYCLE replacement detection, and the WRITE RULES (atomic save: ONE fact per call, no bundling). Returns memory ID + status; async, use ragionex_memory_status to check readiness.",
+      "Save a durable fact, preference, or decision to ragionex-memory-mcp (cross-client persistent memory: Claude Desktop, Claude Code, Cursor, Cline, Codex, ChatGPT, Zed). Use for content that should persist across sessions and AI tools. Parameters: `content` (English; memories are stored in English), `project` (slugified `^[a-z0-9-]+$`, e.g. 'general', 'acme-app'). The priority rule (in CLAUDE.md, injected by the server) defines the full write semantics: PROJECT LABEL inference, WHAT TO SAVE vs SKIP signals, LIFECYCLE replacement detection, and the WRITE RULES (atomic save: ONE fact per call, no bundling). Returns memory ID + status; async, use ragionex_memory_status to check readiness.",
     inputSchema: {
       content: z
         .string()
@@ -278,11 +304,45 @@ server.registerTool(
     },
   },
   async ({ content, project }) => {
-    const result = await api<{ id: string; status: string }>({
-      method: "POST",
-      path: "/v1/memory/write",
-      body: { content, project },
-    });
+    let result: { id: string; status: string };
+    try {
+      result = await api<{ id: string; status: string }>({
+        method: "POST",
+        path: "/v1/memory/write",
+        body: { content, project },
+      });
+    } catch (err) {
+      // Service unreachable (network error / 5xx): queue the save locally so
+      // it is not lost, and say so honestly - the memory is NOT saved yet.
+      // Request errors (4xx: validation, quota, auth) are NOT queued; they
+      // would fail again identically and the caller must see the real error.
+      const unreachable =
+        err instanceof ApiError &&
+        (err.status === undefined || err.status >= 500);
+      if (unreachable) {
+        const queued = enqueuePendingMemory({
+          content,
+          project,
+          ts: new Date().toISOString(),
+        });
+        if (queued) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Memory service unreachable - the memory was queued locally and will sync automatically once the service is reachable again. It is NOT saved yet and will not appear in recall or list results until synced. No action needed.",
+              },
+            ],
+            structuredContent: { queued: true },
+          };
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `${msg} The local offline queue is also full or unwritable, so this memory could NOT be queued - retry once connectivity is restored.`
+        );
+      }
+      throw err;
+    }
     return {
       content: [
         {
@@ -374,7 +434,7 @@ server.registerTool(
       const text =
         data.results && data.results.length > 0
           ? lines.join("\n\n")
-          : "No memories matched. Try rephrasing the query, broadening scope, or removing the project filter.";
+          : "No memories matched. If a project or date filter was set, retry once without it; otherwise treat this as not saved - do not keep re-searching. Tell the user honestly and offer to save the fact.";
       return {
         content: [{ type: "text", text }],
         structuredContent: data as unknown as { [key: string]: unknown },
@@ -401,7 +461,7 @@ server.registerTool(
     const text =
       merged.length > 0
         ? lines.join("\n\n")
-        : "No memories matched. Try rephrasing the query, broadening scope, or removing the project filter.";
+        : "No memories matched. If a project or date filter was set, retry once without it; otherwise treat this as not saved - do not keep re-searching. Tell the user honestly and offer to save the fact.";
     return {
       content: [{ type: "text", text }],
       structuredContent: { success: true, results: merged } as unknown as {
@@ -640,12 +700,18 @@ server.registerTool(
     },
   },
   async ({ id }) => {
-    const data = await api<{ id: string; status: string }>({
+    const data = await api<{ id: string; status: string; message?: string }>({
       method: "GET",
       path: `/v1/memory/status/${encodeURIComponent(id)}`,
     });
+    // Backend includes a guidance `message` per status (e.g. whether a failed
+    // memory retries automatically or needs attention) - pass it through so
+    // the calling agent can act on it.
+    const text = data.message
+      ? `${data.id}: ${data.status} - ${data.message}`
+      : `${data.id}: ${data.status}`;
     return {
-      content: [{ type: "text", text: `${data.id}: ${data.status}` }],
+      content: [{ type: "text", text }],
       structuredContent: data as unknown as { [key: string]: unknown },
     };
   }
@@ -799,9 +865,19 @@ server.registerTool(
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Wire the offline queue to the API client (injected to avoid a circular
+  // import) and attempt an initial sync of any saves queued in past sessions.
+  configureOfflineQueue(async (entry) => {
+    await api({
+      method: "POST",
+      path: "/v1/memory/write",
+      body: { content: entry.content, project: entry.project },
+    });
+  });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[ragionex-memory-mcp] Connected via stdio.");
+  triggerFlush();
 }
 
 main().catch((err) => {
