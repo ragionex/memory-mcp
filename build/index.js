@@ -133,7 +133,7 @@ const SERVER_INSTRUCTIONS = [
     "",
     "Arguments (query, content, project) always in English; reply in the user's language.",
     "",
-    "Replacement signals ('now', 'instead', 'switched to', 'no longer') -> recall FIRST, then update or delete the old memory. Atomic saves: N facts = N save calls.",
+    "Replacement signals ('now', 'instead', 'switched to', 'no longer') -> recall FIRST, then update or delete the old memory. Atomic saves: unrelated facts = separate calls; details of one topic stay in one memory.",
     "",
     "Recall queries: 2-3 full question phrasings joined by ';', never bare keywords, never time words. No topic, only browsing or a time window -> list_memories. Dates only for exact calendar references ('last week', 'in April'), never vague ('recently').",
     "",
@@ -143,7 +143,7 @@ const SERVER_INSTRUCTIONS = [
 ].join("\n");
 const server = new McpServer({
     name: "ragionex-memory-mcp",
-    version: "0.3.0",
+    version: "0.4.0",
 }, {
     instructions: SERVER_INSTRUCTIONS,
 });
