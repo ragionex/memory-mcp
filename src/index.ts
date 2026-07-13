@@ -12,7 +12,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { MAX_SUBQUERIES_MEMORY, mergeRoundRobin } from "./multi-query.js";
 import {
   configureOfflineQueue,
   enqueuePendingMemory,
@@ -40,6 +39,18 @@ if (subcommand === "init") {
 
 const API_BASE = process.env.RAGIONEX_API_BASE ?? "https://api.ragionex.com";
 const API_KEY = process.env.RAGIONEX_MEMORY_API_KEY;
+
+// Per-request ceiling so a hung connection can never stall a tool call
+// forever. Generous on purpose: normal operations finish in well under a
+// second, and a false timeout on save would needlessly detour through the
+// offline queue.
+const REQUEST_TIMEOUT_MS = 30_000;
+
+// Appended ONLY to errors that are the service's fault (5xx, timeouts).
+// User-side errors (bad key, quota, validation) must NOT carry it - pointing
+// those at the issue tracker buries real bug reports under config mistakes.
+const SUPPORT_HINT =
+  " If this keeps happening, please report it: https://github.com/ragionex/memory-mcp/issues";
 
 if (!API_KEY) {
   console.error(
@@ -81,6 +92,7 @@ async function api<T>(opts: RequestOpts): Promise<T> {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   };
   if (opts.body !== undefined) {
     init.body = JSON.stringify(opts.body);
@@ -90,6 +102,14 @@ async function api<T>(opts: RequestOpts): Promise<T> {
   try {
     res = await fetch(url, init);
   } catch (err) {
+    // Timeout carries no HTTP status, so it lands in the same "unreachable"
+    // bucket as DNS/connection failures - saves still detour to the offline
+    // queue instead of being lost.
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new ApiError(
+        `Request to ${url} timed out after ${REQUEST_TIMEOUT_MS / 1000}s. The service may be down or overloaded - retry shortly.${SUPPORT_HINT}`
+      );
+    }
     const msg = err instanceof Error ? err.message : String(err);
     throw new ApiError(
       `Network error reaching ${url}: ${msg}. Check internet connection or RAGIONEX_API_BASE override.`
@@ -123,7 +143,10 @@ async function api<T>(opts: RequestOpts): Promise<T> {
         res.status
       );
     }
-    throw new ApiError(`API error ${res.status}: ${errMsg}`, res.status);
+    throw new ApiError(
+      `API error ${res.status}: ${errMsg}${res.status >= 500 ? SUPPORT_HINT : ""}`,
+      res.status
+    );
   }
 
   // Service is reachable - opportunistically sync any offline-queued saves
@@ -132,17 +155,6 @@ async function api<T>(opts: RequestOpts): Promise<T> {
 
   return payload as T;
 }
-
-// ---------------------------------------------------------------------------
-// Multi-query helper (semicolon split path)
-//
-// ragionex_recall_memory accepts ';' as a separator inside the `query` string for
-// compound questions ("How does the user prefer X?; What font does the user
-// use?"). Each sub-question is fetched in parallel via the wrapper below
-// and the per-part hit lists are interleaved tier-by-tier with id-based
-// dedup (logic in ./multi-query.ts). This wrapper stays in index.ts because
-// it depends on the `api()` helper above.
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Date-range client-side validation (defense in depth)
@@ -202,36 +214,6 @@ function assertDateRangeOrder(
   }
 }
 
-/** Soft-failing wrapper around /v1/memory/search. On any error (network,
- * auth, 5xx, malformed body) returns an empty results envelope instead of
- * throwing, so the multi-query merge can keep going with the surviving
- * sub-queries rather than failing the whole tool call. */
-async function memorySearchSingle(
-  query: string,
-  results: number,
-  project?: string,
-  start_date?: string,
-  end_date?: string
-): Promise<{ success: boolean; results: unknown[] }> {
-  try {
-    const body: Record<string, unknown> = { query, results };
-    if (project) body.project = project;
-    if (start_date) body.start_date = start_date;
-    if (end_date) body.end_date = end_date;
-    return await api<{ success: boolean; results: unknown[] }>({
-      method: "POST",
-      path: "/v1/memory/search",
-      body,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(
-      `[ragionex-memory-mcp] Sub-query '${query.slice(0, 60)}' failed: ${msg}`
-    );
-    return { success: false, results: [] };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
@@ -252,7 +234,7 @@ const SERVER_INSTRUCTIONS = [
   "",
   "Replacement signals ('now', 'instead', 'switched to', 'no longer') -> recall FIRST, then update or delete the old memory. Atomic saves: unrelated facts = separate calls; details of one topic stay in one memory.",
   "",
-  "Recall queries: 2-3 full question phrasings joined by ';', never bare keywords, never time words. No topic, only browsing or a time window -> list_memories. Dates only for exact calendar references ('last week', 'in April'), never vague ('recently').",
+  "Recall: pass 2-3 full question phrasings of the topic as separate `queries` array items - never bare keywords, never time words. No topic, only browsing or a time window -> list_memories. Dates only for exact calendar references ('last week', 'in April'), never vague ('recently').",
   "",
   "On empty recall: retry once without filters; then say it is not saved and offer to save it - never guess.",
   "",
@@ -262,7 +244,7 @@ const SERVER_INSTRUCTIONS = [
 const server = new McpServer(
   {
     name: "ragionex-memory-mcp",
-    version: "0.4.0",
+    version: "0.5.0",
   },
   {
     instructions: SERVER_INSTRUCTIONS,
@@ -364,14 +346,14 @@ server.registerTool(
   {
     title: "Search memories",
     description:
-      "Search memories in ragionex-memory-mcp by semantic similarity. Phrase every part of `query` as a full QUESTION (not keywords), in English, no time vocabulary - full questions match far better than keyword fragments. ALWAYS send 2-3 question phrasings of the topic joined by ';' (merged + deduped, so extras only help) - do not send a single keyword. Other params: optional `project`, optional `start_date` / `end_date` (ISO 8601 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ'). The priority rule (in CLAUDE.md, injected by the server) defines full RECALL semantics: the 2-3-question rule, the EXACT-vs-VAGUE date rule, time-stays-out-of-query. For a time window with no topic, use ragionex_list_memories instead. Returns ranked matches.",
+      "Search memories in ragionex-memory-mcp by semantic similarity. `queries` is an ARRAY of full QUESTION sentences (English, no time vocabulary) - full questions match far better than keyword fragments. ALWAYS send 2-3 different phrasings of the topic as separate array items (results are merged + deduped server-side, so extras only help) - never a single bare keyword. Other params: optional `project`, optional `start_date` / `end_date` (ISO 8601 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ'). The priority rule (in CLAUDE.md, injected by the server) defines full RECALL semantics: the 2-3-question rule, the EXACT-vs-VAGUE date rule, time-stays-out-of-queries. For a time window with no topic, use ragionex_list_memories instead. Returns ranked matches.",
     inputSchema: {
-      query: z
-        .string()
-        .min(10)
-        .max(512)
+      queries: z
+        .array(z.string().min(5).max(512))
+        .min(1)
+        .max(5)
         .describe(
-          "2-3 full QUESTION sentences about the topic, joined by ';' (max 5 parts). ALWAYS send 2-3, never a single query, and NEVER bare keywords - full questions match far better than keyword fragments. DO: 'what is the user\\'s preferred editor?; which IDE does the user use?; what development environment has the user chosen?'. AVOID: 'user editor' or 'preferred editor' (keywords, weak match). For several independent topics, give each its own 2-3 questions within the 5-part cap. Time references (week, month, last, since, dates) MUST NOT appear here - they go in start_date / end_date. If there is no topic at all (only a time window), use ragionex_list_memories instead."
+          "1-5 full QUESTION sentences about the topic, one per array item. ALWAYS send 2-3 phrasings, never a single item, and NEVER bare keywords - full questions match far better than keyword fragments. DO: ['what is the user\\'s preferred editor?', 'which IDE does the user use?', 'what development environment has the user chosen?']. AVOID: ['user editor'] (keywords, weak match). For several independent topics, give each its own 2-3 questions within the 5-item cap. Time references (week, month, last, since, dates) MUST NOT appear here - they go in start_date / end_date. If there is no topic at all (only a time window), use ragionex_list_memories instead."
         ),
       results: z
         .number()
@@ -380,7 +362,7 @@ server.registerTool(
         .max(50)
         .default(10)
         .describe(
-          "Maximum number of results to return PER sub-question. Default 10 is a good general fit; raise for broader recall, lower for tight focused recall. In multi-query mode each part fetches this many results before round-robin merge + dedup."
+          "Maximum number of results to return, merged across all questions. Default 10 is a good general fit; raise for broader recall, lower for tight focused recall."
         ),
       project: z
         .string()
@@ -405,68 +387,37 @@ server.registerTool(
       openWorldHint: true,
     },
   },
-  async ({ query, results, project, start_date, end_date }) => {
+  async ({ queries, results, project, start_date, end_date }) => {
     assertDateRangeOrder(start_date, end_date);
-    // Split on ';', trim, drop empties. AI is told to use this separator
-    // for independent sub-topics in the tool description above.
-    let parts = query
-      .split(";")
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
-    if (parts.length > MAX_SUBQUERIES_MEMORY) {
-      console.error(
-        `[ragionex-memory-mcp] Multi-query received ${parts.length} parts; capped to first ${MAX_SUBQUERIES_MEMORY}`
-      );
-      parts = parts.slice(0, MAX_SUBQUERIES_MEMORY);
+    // One request carries every question; the service searches each question
+    // and returns a single merged, deduplicated ranking. Errors propagate
+    // as-is: a failed request must surface as an ERROR, never as an empty
+    // result - otherwise an outage or bad key reads as "the user never
+    // saved this".
+    const body: Record<string, unknown> = { queries, results };
+    if (project) body.project = project;
+    if (start_date) body.start_date = start_date;
+    if (end_date) body.end_date = end_date;
+    const data = await api<{ success: boolean; results: unknown[] } | null>({
+      method: "POST",
+      path: "/v1/memory/search",
+      body,
+    });
+    if (!data) {
+      throw new Error("Empty response body from the memory service.");
     }
-
-    // Single-part / empty-after-trim path: behaves exactly like the original
-    // implementation. Empty parts (raw query was only ';' or whitespace)
-    // falls back to the raw string so the server's validation surfaces the
-    // real input rather than silently mangling it.
-    if (parts.length <= 1) {
-      const single = parts.length === 1 ? parts[0] : query;
-      const data = await memorySearchSingle(single, results, project, start_date, end_date);
-      const lines = (data.results || []).map((r, i) => {
-        const obj = r as Record<string, unknown>;
-        return `[${i + 1}] ${JSON.stringify(obj)}`;
-      });
-      const text =
-        data.results && data.results.length > 0
-          ? lines.join("\n\n")
-          : "No memories matched. If a project or date filter was set, retry once without it; otherwise treat this as not saved - do not keep re-searching. Tell the user honestly and offer to save the fact.";
-      return {
-        content: [{ type: "text", text }],
-        structuredContent: data as unknown as { [key: string]: unknown },
-      };
-    }
-
-    // Multi-query path: parallel fetch + round-robin dedup merge. Promise.all
-    // is safe here because memorySearchSingle never rejects -- it returns a
-    // soft-failed envelope, so a single failing part can't tear down the
-    // whole call.
-    console.error(
-      `[ragionex-memory-mcp] Multi-query split: ${parts.length} parts`
-    );
-    const subResults = await Promise.all(
-      parts.map((p) => memorySearchSingle(p, results, project, start_date, end_date))
-    );
-    const perPartLists: unknown[][] = subResults.map((r) => r.results || []);
-    const merged = mergeRoundRobin(perPartLists);
-
-    const lines = merged.map((r, i) => {
+    const matches = data.results || [];
+    const lines = matches.map((r, i) => {
       const obj = r as Record<string, unknown>;
       return `[${i + 1}] ${JSON.stringify(obj)}`;
     });
     const text =
-      merged.length > 0
+      matches.length > 0
         ? lines.join("\n\n")
         : "No memories matched. If a project or date filter was set, retry once without it; otherwise treat this as not saved - do not keep re-searching. Tell the user honestly and offer to save the fact.";
     return {
       content: [{ type: "text", text }],
-      structuredContent: { success: true, results: merged } as unknown as {
-        [key: string]: unknown;
-      },
+      structuredContent: data as unknown as { [key: string]: unknown },
     };
   }
 );
@@ -480,7 +431,7 @@ server.registerTool(
   {
     title: "List memories (browse)",
     description:
-      "List memories with previews and processing status, ordered by most recently created. Use this to BROWSE what is stored when there is no specific topic to search for - especially when the user asks 'what did I save last week?', 'show me April memories', or any time-window-only request. Parameters: optional `project` (slug), optional `start_date` and `end_date` (ISO 8601: 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ'). See the priority rule (in CLAUDE.md, injected by the server) for the LIST vs RECALL decision (topic -> recall, no topic -> list) and the EXACT-vs-VAGUE date rule. For full content of specific IDs, use ragionex_view_memory.",
+      "List memories with previews and processing status, ordered by most recently created. Use this to BROWSE what is stored when there is no specific topic to search for - especially when the user asks 'what did I save last week?', 'show me April memories', or any time-window-only request. Parameters: optional `project` (slug), optional `start_date` and `end_date` (ISO 8601: 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SSZ'), optional `limit` (most recent first, default 50). See the priority rule (in CLAUDE.md, injected by the server) for the LIST vs RECALL decision (topic -> recall, no topic -> list) and the EXACT-vs-VAGUE date rule. For full content of specific IDs, use ragionex_view_memory.",
     inputSchema: {
       project: z
         .string()
@@ -497,6 +448,15 @@ server.registerTool(
       end_date: dateParam(
         "Optional inclusive upper bound for memory creation date. ISO 8601: 'YYYY-MM-DD' (end-of-day UTC) or 'YYYY-MM-DDTHH:MM:SSZ'. Set ONLY for exact, calendar-anchored time references; omit for vague time."
       ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .default(50)
+        .describe(
+          "Maximum memories to return, most recent first. Default 50. When the account holds more than this, the output says how many were omitted - narrow with project/date filters or raise the limit."
+        ),
     },
     annotations: {
       readOnlyHint: true,
@@ -505,7 +465,7 @@ server.registerTool(
       openWorldHint: true,
     },
   },
-  async ({ project, start_date, end_date }) => {
+  async ({ project, start_date, end_date, limit }) => {
     assertDateRangeOrder(start_date, end_date);
     const params = new URLSearchParams();
     if (project) params.set("project", project);
@@ -518,20 +478,33 @@ server.registerTool(
     });
     const memories = data.memories || [];
     if (memories.length === 0) {
+      // Distinguish "account is empty" from "filters matched nothing" - the
+      // latter must not read as if the user never saved anything.
+      const filtered = Boolean(project || start_date || end_date);
       return {
         content: [
           {
             type: "text",
-            text: "No memories saved yet. Use ragionex_save_memory to save the first one.",
+            text: filtered
+              ? "No memories match these filters. Memories may still exist outside this project/date range - retry without filters to browse everything before concluding anything is missing."
+              : "No memories saved yet. Use ragionex_save_memory to save the first one.",
           },
         ],
         structuredContent: data as unknown as { [key: string]: unknown },
       };
     }
-    const lines = memories.map((m, i) => `[${i + 1}] ${JSON.stringify(m)}`);
+    // Rows arrive most-recent-first; cap what enters the model's context and
+    // say so explicitly when older rows were cut.
+    const shown = memories.slice(0, limit);
+    const omitted = memories.length - shown.length;
+    const lines = shown.map((m, i) => `[${i + 1}] ${JSON.stringify(m)}`);
+    const text =
+      omitted > 0
+        ? `${lines.join("\n")}\n\nShowing the ${shown.length} most recent of ${memories.length} matching memories (${omitted} older ones omitted). Narrow with project/date filters or raise 'limit' to see more.`
+        : lines.join("\n");
     return {
-      content: [{ type: "text", text: lines.join("\n") }],
-      structuredContent: data as unknown as { [key: string]: unknown },
+      content: [{ type: "text", text }],
+      structuredContent: { memories: shown } as unknown as { [key: string]: unknown },
     };
   }
 );
@@ -878,6 +851,26 @@ async function main() {
   await server.connect(transport);
   console.error("[ragionex-memory-mcp] Connected via stdio.");
   triggerFlush();
+
+  // Fire-and-forget key check so a misconfigured key surfaces at setup time
+  // instead of mid-conversation on the first real tool call. Uses a
+  // lightweight read that does not count against the plan's request quota.
+  // Network failures stay silent (being offline at boot is fine); only a
+  // definitive auth rejection warns.
+  void (async () => {
+    try {
+      await api({ method: "GET", path: "/v1/memory/projects" });
+    } catch (err) {
+      if (
+        err instanceof ApiError &&
+        (err.status === 401 || err.status === 403)
+      ) {
+        console.error(
+          "[ragionex-memory-mcp] WARNING: the API key was rejected. Every tool call will fail until RAGIONEX_MEMORY_API_KEY is corrected. Get your key at https://app.ragionex.com/keys"
+        );
+      }
+    }
+  })();
 }
 
 main().catch((err) => {
