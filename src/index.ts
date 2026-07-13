@@ -244,7 +244,7 @@ const SERVER_INSTRUCTIONS = [
 const server = new McpServer(
   {
     name: "ragionex-memory-mcp",
-    version: "0.5.0",
+    version: "0.5.1",
   },
   {
     instructions: SERVER_INSTRUCTIONS,

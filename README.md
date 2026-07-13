@@ -39,10 +39,9 @@ Recall quality is the whole product, so we measure it: 203 verified queries agai
 |---|---|
 | **100%** | Found, every time. 203 of 203 - nothing the agent asked for was lost. |
 | **96%** | In the top 3 results - right where your agent looks first. |
-| **78%** | The very first result, first try. |
 | **< 1s** | End-to-end, on a fresh query, searching all 3,296 memories. |
 
-37% of those queries used messy, real-user phrasing rather than clean question form - zero misses there too. Long memories hold up as well: even 41+ sentence entries hit the #1 spot 75% of the time, and every one of them was still found.
+37% of those queries used messy, real-user phrasing rather than clean question form - zero misses there too. Long memories hold up as well: even 41+ sentence entries were found every single time.
 
 ## What you're doing instead
 
@@ -106,11 +105,11 @@ If anything misbehaves - a failed save, a memory that will not come back, an err
 
 ## Links
 
-Documentation: https://ragionex.com/docs
-Memory product: https://ragionex.com/memory
-Website: https://ragionex.com
-Discord: https://discord.gg/d79f3MDVd4
-Email: contact@ragionex.com
+- Documentation: https://ragionex.com/docs
+- Memory product: https://ragionex.com/memory
+- Website: https://ragionex.com
+- Discord: https://discord.gg/d79f3MDVd4
+- Email: contact@ragionex.com
 
 ## License
 

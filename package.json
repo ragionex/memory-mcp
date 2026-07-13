@@ -1,6 +1,6 @@
 {
   "name": "@ragionex/memory-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "MCP server for Ragionex Memory - persistent memory for AI agents.",
   "license": "MIT",
   "homepage": "https://ragionex.com/memory/",
