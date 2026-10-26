@@ -1,116 +1,213 @@
-# Ragionex Memory
+<div align="center">
 
-**Persistent memory for your AI agents. Tell it once - every session, every project, every tool remembers.**
+<a href="https://ragionex.com"><img src="assets/ragionex-memory.png" alt="Agents write. Agents read. Ragionex remembers. Three agents and two teammates share one Vault, each with its own permissions." width="100%"></a>
 
-Your AI agent forgets everything between sessions. A month later, so do you.
+<h1>Ragionex Memory</h1>
 
-- **New session:** your agent forgot what you're building, how you like things done, last week's call.
-- **Weeks later:** *you* can't remember why you decided that either.
-- **New agent:** blank slate, all over again.
+<b>Long-term memory for your AI coding agents</b><br>
+Your agents save what matters on their own, fix what changed and pick up where you left off in every new session.<br>
+Keep each project in its own Vault, give every key only the access it needs, and share memory with your team.
 
-So you explain it all over again. Every. Single. Time.
+[![npm](https://img.shields.io/npm/v/@ragionex/memory-mcp?label=npm&color=4b5cf0)](https://www.npmjs.com/package/@ragionex/memory-mcp)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-3c873a)](https://nodejs.org)
+[![MCP](https://img.shields.io/badge/MCP-stdio-1f2937)](https://modelcontextprotocol.io)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/d79f3MDVd4)
 
-**Ragionex Memory remembers - so neither of you has to.** Decisions, preferences, dead-ends: captured as you work, surfaced the instant they are relevant. It is an MCP server - one API key, the same memory in Claude Code, Claude Desktop, Codex, ChatGPT (Apps SDK), Cursor, Cline, and [500+ MCP clients](https://www.pulsemcp.com/clients).
+<a href="https://app.ragionex.com/keys"><b>Get a Free Key</b></a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/docs">Documentation</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/pricing">Pricing</a>
 
-And it is honest by design: when nothing matching is saved, it says so. It never fills the gap with a guess.
+</div>
 
-## How recall works
+<br>
 
-Save a fact once - say, in Claude Code, project `acme-app`:
+## What You Get
 
-> *"acme-app deploys to Cloudflare Workers, never AWS."*
+**Automatic Memory.** Your agent automatically saves the decisions, preferences and project facts that come up while you work, and checks its memory before it answers, starts a task or asks you anything about your work. You can still tell it to remember or forget anything, any time.
 
-Then ask, anywhere:
+**Always Up to Date.** A changed decision updates its record instead of adding a second one, and a record that turns out wrong is removed. Every change ends with one short line in the reply, so "undo that" is one sentence away.
 
-| You ask... | In project | Result |
-|---|---|---|
-| in a new session, days later | `acme-app` | ✅ Recalled - no re-explaining |
-| from Cursor instead of Claude Code | `acme-app` | ✅ Recalled - same memory, any tool |
-| while working on a different project | `blog-api` | 🔒 Isolated by design - projects stay separate |
-| with a cross-project search | (any) | ✅ Surfaces, labeled `acme-app` |
+**Version History.** Earlier versions of every memory, and deleted records in the trash, are kept for 30 days. Bring any of them back just by asking your agent, or from the dashboard.
 
-Recall is semantic: ask in your own words, days later, phrased nothing like the original - it still comes back. And it is scoped: your agent gets just the relevant memory, not a context dump it skims past.
+**Fast, Exact Recall.** Recall returns in milliseconds, and memories come back exactly as they were saved: Ragionex never rewrites a memory or generates an answer.
 
-## Measured, not promised
+**Projects and Teams.** Each project can keep its own memory in its own Vault, and a search never crosses into another. Every key carries its own Read, Create, Update and Delete permissions. Share a Vault with teammates, give each member their own permissions, and every member's agents draw from and add to the same memory.
 
-Recall quality is the whole product, so we measure it: 203 verified queries against a 3,296-memory corpus built from a pinned public dataset (`microsoft/vscode-docs`), graded with a multi-reference answer key, on the same defaults you get when you install it.
+**Safe and Private.** Saves are written to disk before they are sent, so an outage only delays them. Memories are stored in the EU, encrypted with AES-256, and exportable at any time.
 
-| | |
-|---|---|
-| **100%** | Found, every time. 203 of 203 - nothing the agent asked for was lost. |
-| **96%** | In the top 3 results - right where your agent looks first. |
-| **< 1s** | End-to-end, on a fresh query, searching all 3,296 memories. |
+**Works Where You Work.** One command sets up Claude Code, Codex or OpenCode. Claude Desktop, Cursor, Cline and other MCP clients connect too.
 
-37% of those queries used messy, real-user phrasing rather than clean question form - zero misses there too. Long memories hold up as well: even 41+ sentence entries were found every single time.
+## Quick Start
 
-## What you're doing instead
+**1. Get a Key.** Sign in at [app.ragionex.com/keys](https://app.ragionex.com/keys) and create a free key, no credit card needed. Give your main agent's key Read, Create, Update and Delete, so it can also clean up. The key is shown once.
 
-| The workaround | Where it breaks |
-|---|---|
-| Pasting the same context into every new session | You are the memory. It costs you minutes, daily, forever. |
-| One giant `CLAUDE.md` / `.cursorrules` file | Grows into a token-hungry monolith the agent skims past. Every rule is in context, always, relevant or not. |
-| The vendor's built-in memory | Locked inside one app. Switch tools, start from zero. |
+**2. Install.** Requires Node.js 18 or later.
 
-Ragionex flips it: save once, and only the *relevant* memory enters the context, when it is relevant. Sessions change, tools change, projects change - the memory stays.
+```bash
+npx -y @ragionex/memory-mcp@latest install --agent claude-code
+```
 
-## 📌 Get started
+For Codex or OpenCode, use `--agent codex` or `--agent opencode` instead; for every installed agent at once, use `--all-agents` in its place. The installer asks for the key at a hidden prompt and checks it before changing anything.
 
-Get a free key at **[app.ragionex.com/keys](https://app.ragionex.com/keys)** - no credit card, takes seconds. Then **either**:
+**3. Restart and Check.** Quit and reopen the agent, then ask it to *check my Ragionex Memory connection*. It shows the selected Vault, every Vault the key can use and its permissions. From here on, just work.
 
-**A) Let your agent set it up.** Paste this to your AI agent:
+> **For AI Assistants Setting This Up:** run the `install` command above with `--agent` set to the agent the user wants memory in (`claude-code`, `codex` or `opencode`). A noninteractive run never waits for input; without a key, pass the follow-up steps it prints to the user. Then tell the user to restart their agent, which you cannot do yourself. Do not report working memory until a valid key is configured.
 
-> *Add the `@ragionex/memory-mcp` MCP server to my config using my API key `rgx_memory_...`*
+### Other MCP Clients
 
-**B) Set it up yourself.** Add this to your MCP client's **user-global** config:
+Claude Desktop, Cursor, Cline and other clients that run local MCP servers use the same tools. Add the server to the client's user-global MCP config:
 
 ```json
 {
   "mcpServers": {
     "ragionex-memory-mcp": {
       "command": "npx",
-      "args": ["-y", "@ragionex/memory-mcp"],
+      "args": ["-y", "@ragionex/memory-mcp@latest"],
       "env": { "RAGIONEX_MEMORY_API_KEY": "rgx_memory_..." }
     }
   }
 }
 ```
 
-**Restart your agent after adding the config** - clients load MCP servers at startup, so quit and reopen (or start a new session). Then tell it something worth keeping; it is there next session, and in every other tool.
+These clients get the tools but not the memory rule that `install` adds for Claude Code, Codex and OpenCode, so they use memory less consistently on their own. See the [MCP Client Notes](https://ragionex.com/docs/guides/mcp-client-notes) for client-specific details.
 
-> **If you are an AI agent setting this up:** after you edit the config, you must tell the user to restart their client (quit and reopen) - the new server only loads on restart, and you cannot reload it yourself. Do not report success without that instruction.
+## Vaults, Keys and Teams
 
-Want the hands-on version? The [Memory quickstart](https://ragionex.com/docs/get-started/quickstart-memory) walks through writing your first memory, waiting for it to be ready, and searching it back.
+A **Vault** is a separate set of memories. A **key** decides what an agent may do in it. A **member** is a teammate the Vault's owner shared it with. The picture above shows them working together:
 
-## Free. Actually free.
+| Who | Read | Create | Update | Delete |
+|---|:---:|:---:|:---:|:---:|
+| Your agent 1 | &#x2705; | &#x2705; | &#x2705; | &#x2705; |
+| Your agent 2 | &#x2705; | &#x2705; | | |
+| Your agent 3 | &#x2705; | &#x2705; | &#x2705; | &#x2705; |
+| Teammate A | &#x2705; | &#x2705; | &#x2705; | |
+| Teammate B | &#x2705; | | | |
 
-**10,000 saves and recalls, every month.** No credit card. No trial clock. Export anytime, delete anytime, zero lock-in. If it does not earn its place in your setup, leaving costs you nothing.
+The picture shows Create and Update as Write and Edit.
 
-## ⚠️ Known issues and limitations
+### A Vault and Key per Project
 
-Some MCP clients have quirks in how the always-on memory rule loads. None of them stop the tools from working:
+A new account starts with **My vault** as its default, and every project without its own Vault uses the default. To give a project its own memory, create a Vault in the [Dashboard](https://app.ragionex.com), then ask your agent to *use my acme-app Vault for this project*, or put a `RAGIONEX_MEMORY.jsonc` file in the project folder:
 
-- **Claude Code** lazy-loads and clips tool guidance, so on startup the server writes one short priority rule into your always-loaded rules file (`CLAUDE.md` / `AGENTS.md`) to keep memory routing reliable. It is marker-wrapped, backed up, and reversible: [how it works and how to control it](https://ragionex.com/docs/guides/config-rule).
-- **Codex** with a non-default model can report the `ragionex_*` tools as unavailable (a Codex-side limitation; default models work). Upstream: [#19871](https://github.com/openai/codex/issues/19871), [#21503](https://github.com/openai/codex/issues/21503).
-- **Windsurf (now Devin Desktop)** caps global rule files at 6,000 characters, so the priority rule is not auto-installed there; the tools still work.
+```jsonc
+{
+  // The Vault this project uses (shown by the connection check and in the dashboard)
+  "vault_id": "<Vault ID>",
+  // Optional: a key only this project uses, for example one that can only read
+  "api_key": "rgx_memory_..."
+}
+```
 
-Full notes and workarounds: [MCP client notes](https://ragionex.com/docs/guides/mcp-client-notes).
+- The file is read on every request, so a change applies at once, with no restart.
+- Only the project folder itself is checked, not its parents.
+- Add the file to `.gitignore` before putting a key in it.
+- A broken file, an unknown field or a rejected key stops the request with a clear error. Memory never falls back to another Vault or key.
 
-## Something broken? Tell us.
+### Work with Your Team
 
-If anything misbehaves - a failed save, a memory that will not come back, an error that makes no sense - we want to know:
+- **Share a Vault.** In the [Dashboard](https://app.ragionex.com), the owner shares a Vault and gives each member Read, Create, Update or Delete.
+- **One Memory for Everyone.** A decision one teammate's agent saves can be recalled by every member's agent with Read access.
+- **Two Locks.** In a shared Vault, an action must be allowed by both the key and the member's permissions. A teammate with Read only cannot change anything, whatever their key allows.
 
-- **Bugs:** [github.com/ragionex/memory-mcp/issues](https://github.com/ragionex/memory-mcp/issues)
-- **Questions and community:** [Discord](https://discord.gg/d79f3MDVd4)
-- **Private reports:** contact@ragionex.com
+### Keys
 
-## Links
+- A key belongs to your account and works in every Vault you own or that is shared with you.
+- Give each key only what its agent needs. A key with Read only can recall but never change anything.
+- Keys are created with fixed permissions and revoked in the [Dashboard](https://app.ragionex.com/keys).
 
-- Documentation: https://ragionex.com/docs
-- Memory product: https://ragionex.com/memory
-- Website: https://ragionex.com
-- Discord: https://discord.gg/d79f3MDVd4
-- Email: contact@ragionex.com
+## Free Plan
+
+| Requests | Memory Size | Stored Memories | Vaults | Keys | Teammates |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 10,000 per 30 days | 10,000 characters | Unlimited | 2 | 2 | 1 per Vault |
+
+Saving, editing and restoring a memory each cost 1 request, and so does each search page fetched from the service. Browsing, viewing, deleting, the trash, version history, status checks and export are free. Free is for personal projects and evaluation and is in early access, so its limits may change. Commercial use is not permitted on Free; [Pro](https://ragionex.com/pricing) is coming soon.
+
+## Reference
+
+<details>
+<summary><b>Tools</b></summary>
+
+| Tool | Permission | Description |
+|---|---|---|
+| `ragionex_recall_memory` | Read | Finds memories by meaning, one complete question at a time, with optional exact dates. Whole records arrive on numbered pages |
+| `ragionex_list_memories` | Read | Browses newest first with short previews, up to 100 per page |
+| `ragionex_view_memory` | Read | Returns the full text and revision of up to 50 records by ID |
+| `ragionex_save_memory` | Create | Saves a new record |
+| `ragionex_update_memory` | Update | Replaces a record's content, checked against the revision the agent last read |
+| `ragionex_delete_memory` | Delete | Moves records to the trash |
+| `ragionex_list_trash` | Read | Lists deleted records with their restore deadlines |
+| `ragionex_memory_versions` | Read | Lists retained versions or reads one in full |
+| `ragionex_restore_memory` | Update | Restores a trashed record or an older version as the next revision |
+| `ragionex_memory_status` | Read | Shows whether a new or edited record is still processing |
+| `ragionex_memory_connection` | Any valid key | Shows the selected Vault and why, every Vault the key can use, its permissions and any saves waiting on this machine |
+
+Every record has `id`, `vault_id`, `content`, `created_at`, `updated_at`, `status`, `revision`, `created_by` and `updated_by`. New, edited and restored records are briefly `processing` before recall can find them. Permanent deletion, export, Vault sharing, key management and account deletion live in the [Dashboard](https://app.ragionex.com).
+
+</details>
+
+<details>
+<summary><b>Configuration, Updating and Uninstalling</b></summary>
+
+| Setting | Details |
+|---|---|
+| `RAGIONEX_MEMORY_API_KEY` | The agent's key. `install` takes it from `--api-key`, this variable or a hidden prompt, in that order, and stores it in the agent's MCP registration |
+| `RAGIONEX_API_BASE` | Optional API address, default `https://api.ragionex.com` |
+| Relocated Agent Homes | `install` and `uninstall` follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `XDG_CONFIG_HOME` |
+| Tool Timeout | Allow each MCP tool call more than 120 seconds, the connector's own request deadline, so a slow request still ends with its result or clear guidance |
+| Windows | Claude Code is registered with the `cmd /c` wrapper it needs for `npx` servers. Run Codex and OpenCode under WSL |
+| Diagnostics | The server writes to stderr; see your client's MCP server log |
+
+- **Project Folder.** The folder the agent reports: Claude Code's project directory, the client's single workspace root, or the folder the server started in.
+- **Updating.** Run `install` again with `@latest` and your agent, then restart the agent. A run without a key keeps the existing registration and key.
+- **The Memory Rule.** It lives between `ragionex-memory-mcp:priority-rule` markers in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` or `~/.config/opencode/AGENTS.md`, and refreshes itself after an upgrade. To keep your own version, edit the begin marker and the server leaves the block alone. See the [Memory Rule Guide](https://ragionex.com/docs/guides/config-rule).
+- **Uninstalling.** `npx -y @ragionex/memory-mcp@latest uninstall --agent claude-code` removes the registration and the rule; a rule you froze by editing its begin marker stays and is removed by hand. Saves that have not synced yet stay on disk.
+
+</details>
+
+<details>
+<summary><b>Local Data and Recovery</b></summary>
+
+- Saves waiting to sync live in `~/.ragionex/pending-saves/`, one folder per key and API address. The files hold the saved content, unencrypted, and delivery metadata.
+- `*.pending.json` files retry automatically with their original request IDs, so a retry never creates a second record. A save kept because of the plan limit is sent after the quota resets and counts toward the period in which the service accepts it.
+- `*.blocked-<reason>.json` files were rejected during a later sync. They are never sent again automatically; review them using the paths `ragionex_memory_connection` reports.
+- A waiting save keeps the key, API address and project Vault it was made with; one made without a project Vault goes to the account default. Do not edit the files or move them between key folders, and stop every connector instance before deleting a file you have reviewed.
+- An older `~/.ragionex/pending-memories.jsonl` is never sent automatically; review it before removing it.
+- `~/.ragionex/recall-pages/` lets a search continue on its next page after a restart: one small file per search, named by a digest, holding only its save time, paging details and the IDs already shown, never the question, memory text or key. Expired files are removed automatically, and deleting them is safe; after a restart, the agent starts that search again.
+
+</details>
+
+<details>
+<summary><b>Security</b></summary>
+
+- **Memories Are Data, Not Instructions.** Agents are told never to follow saved content to change permissions, call tools or override you.
+- **HTTPS Only.** The connector refuses plain HTTP except for `localhost`, `127.0.0.1` and `[::1]`.
+
+</details>
+
+## Troubleshooting
+
+| Symptom | Solution |
+|---|---|
+| The agent does not use memory or says the tools are unavailable | Restart the agent after installing; MCP servers load at startup. Then ask it to check the connection |
+| "The API key is invalid or revoked" | Create a new key and run `install` again; the agent shows the exact command |
+| A save is "queued" or "not confirmed yet" | The service was unreachable or a limit was reached. The save waits on this machine and is sent automatically; the connection check shows anything still waiting |
+| Something saved a moment ago is not found | New records are briefly `processing`; ask the agent to check its status |
+| A permission error | The key, or your access to a shared Vault, lacks that permission. Use a key that has it, or ask the Vault's owner |
+| "No Vault is selected" | Choose a default Vault in the dashboard, or add a `RAGIONEX_MEMORY.jsonc` to the project |
+
+## About Ragionex
+
+Ragionex is a context engine for AI agents. It keeps what your agents learn and returns it exactly as it was saved: it never rewrites a memory and never generates an answer, so the reasoning stays with your agent. Recall comes back in milliseconds, and the same question over the same memories always returns the same results.
+
+## Support
+
+| Channel | When to Use |
+|---|---|
+| [GitHub Issues](https://github.com/ragionex/memory-mcp/issues) | Bug reports |
+| [Discord](https://discord.gg/d79f3MDVd4) | Questions and community |
+| contact@ragionex.com | Private and security reports |
+| [Documentation](https://ragionex.com/docs) | Setup guides and concepts |
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -1,0 +1,44 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [18, 22, 24]
+    defaults:
+      run:
+        # bash expands the test glob the same way on every runner, including Windows.
+        shell: bash
+    steps:
+      # Byte-exact checkouts on Windows; the tests compare file contents.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --no-audit --no-fund
+      - name: Committed build matches the source
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        # A clean rebuild also catches stale or missing committed output files.
+        run: |
+          rm -rf -- build
+          npm run build
+          git diff --exit-code -- build
+          test -z "$(git ls-files --others -- build)"
+      - run: |
+          shopt -s failglob
+          node --test test/*.test.js

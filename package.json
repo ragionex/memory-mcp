@@ -1,9 +1,21 @@
 {
   "name": "@ragionex/memory-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
+  "mcpName": "io.github.ragionex/memory-mcp",
   "description": "MCP server for Ragionex Memory - persistent memory for AI agents.",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "memory",
+    "persistent-memory",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "opencode"
+  ],
   "license": "MIT",
-  "homepage": "https://ragionex.com/memory/",
+  "homepage": "https://ragionex.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ragionex/memory-mcp.git"
@@ -13,14 +25,14 @@
     "email": "contact@ragionex.com"
   },
   "type": "module",
-  "main": "build/index.js",
   "bin": {
     "ragionex-memory-mcp": "build/index.js"
   },
   "files": [
     "build/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "npm-shrinkwrap.json"
   ],
   "engines": {
     "node": ">=18"
@@ -30,17 +42,19 @@
   },
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
-    "prepublishOnly": "npm run build",
+    "test": "node --test test/*.test.js",
+    "prepublishOnly": "npm run build && npm test",
     "start": "node build/index.js",
     "dev": "tsc --watch",
     "inspect": "npx @modelcontextprotocol/inspector node build/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "zod": "3.25.76"
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "jsonc-parser": "3.3.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@types/node": "22.19.19",
+    "@types/node": "18.19.130",
     "typescript": "5.9.3"
   }
 }
