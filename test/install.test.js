@@ -4,10 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { parse } from "jsonc-parser";
-import { PACKAGE, apiKey, connect, machine, startMock, text } from "./helpers.js";
+import { PACKAGE, SETUP, machine, startMock } from "./helpers.js";
 
-const KEY = apiKey("a");
-const NEW_KEY = apiKey("b");
 const SERVER = "ragionex-memory-mcp";
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf-8"));
 const rules = (file) => fs.existsSync(file) && fs.readFileSync(file, "utf-8").includes("priority-rule:begin");
@@ -28,73 +26,6 @@ test("top-level commands print usage or the version", async (t) => {
   assert.match(removedFlag.stderr, /Unknown argument: --remove/);
 });
 
-test("registration presence reads only the user-scope server map", async (t) => {
-  const mock = await startMock(t);
-  const mentions = JSON.stringify({ projects: { "/work": { allowedTools: [`mcp__${SERVER}__ragionex_save_memory`] } } });
-
-  const keyless = machine(t);
-  fs.writeFileSync(path.join(keyless.home, ".claude.json"), mentions);
-  const first = await keyless.run(["install", "--agent", "claude-code"]);
-  assert.equal(first.status, 0, first.stderr);
-  assert.match(first.stdout, /^Installed for Claude Code/m);
-  assert.deepEqual(readJson(path.join(keyless.home, ".claude.json")).mcpServers[SERVER].env, {
-    RAGIONEX_API_BASE: "http://127.0.0.1:9",
-  });
-
-  const keyed = machine(t);
-  const config = path.join(keyed.home, ".claude.json");
-  fs.writeFileSync(config, mentions);
-  const result = await keyed.run(["install", "--agent", "claude-code", "--api-key", KEY], { RAGIONEX_API_BASE: mock.base });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(keyed.calls().map((call) => call[2]), ["add"]);
-  assert.equal(readJson(config).mcpServers[SERVER].env.RAGIONEX_MEMORY_API_KEY, KEY);
-  assert.deepEqual(fs.readdirSync(keyed.home).filter((name) => name.includes("ragionex-backup")), []);
-  const rerun = await keyed.run(["install", "--agent", "claude-code"]);
-  assert.match(rerun.stdout, /Kept the existing registration/);
-  assert.equal(readJson(config).mcpServers[SERVER].env.RAGIONEX_MEMORY_API_KEY, KEY);
-});
-
-test("a keyed reinstall is checked, then replaces the key through remove and add", async (t) => {
-  const mock = await startMock(t);
-  const box = machine(t);
-  const env = { RAGIONEX_API_BASE: mock.base };
-  assert.equal((await box.run(["install", "--agent", "claude-code", "--api-key", KEY], env)).status, 0);
-  const result = await box.run(["install", "--agent", "claude-code", "--api-key", NEW_KEY], env);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Key verified \(permissions:/);
-  assert.ok(mock.state.requests.some((request) => request.url === "/v1/memory/identity" && request.headers["x-api-key"] === NEW_KEY));
-  assert.deepEqual(box.calls().slice(-2).map((call) => call[2]), ["remove", "add"]);
-  assert.equal(readJson(path.join(box.home, ".claude.json")).mcpServers[SERVER].env.RAGIONEX_MEMORY_API_KEY, NEW_KEY);
-  assert.deepEqual(fs.readdirSync(box.home).filter((name) => name.includes("ragionex-backup")), []);
-});
-
-test("a rejected key stops the install before any change", async (t) => {
-  const mock = await startMock(t);
-  mock.state.replies.identity.push({ status: 401, body: { success: false, error: "Invalid API key" } });
-  const box = machine(t);
-  const result = await box.run(["install", "--agent", "claude-code", "--api-key", KEY], { RAGIONEX_API_BASE: mock.base });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /rejected/);
-  assert.deepEqual(box.calls(), []);
-  assert.equal(rules(path.join(box.home, ".claude", "CLAUDE.md")), false);
-});
-
-test("an unavailable service only warns, and a malformed key is refused without a request", async (t) => {
-  const mock = await startMock(t);
-  mock.state.replies.identity.push({ status: 503, headers: { "Retry-After": "5" } });
-  const box = machine(t);
-  const busy = await box.run(["install", "--agent", "claude-code", "--api-key", KEY], { RAGIONEX_API_BASE: mock.base });
-  assert.equal(busy.status, 0, busy.stderr);
-  assert.match(busy.stderr, /could not be checked \(HTTP 503\)/);
-  const offline = await box.run(["install", "--agent", "claude-code", "--api-key", NEW_KEY]);
-  assert.equal(offline.status, 0, offline.stderr);
-  assert.match(offline.stderr, /could not be checked/);
-  const requests = mock.state.requests.length;
-  const malformed = await box.run(["install", "--agent", "claude-code", "--api-key", "rgx_memory_not a key"], { RAGIONEX_API_BASE: mock.base });
-  assert.equal(malformed.status, 2);
-  assert.equal(mock.state.requests.length, requests);
-});
-
 test("relocated agent homes hold the rule and reach the server environment", async (t) => {
   const mock = await startMock(t);
   const box = machine(t, { folders: [] });
@@ -103,7 +34,7 @@ test("relocated agent homes hold the rule and reach the server environment", asy
   const codexHome = path.join(box.root, "work codex");
   fs.mkdirSync(claudeHome);
   fs.mkdirSync(codexHome);
-  const result = await box.run(["install", "--all-agents", "--api-key", KEY], {
+  const result = await box.run(["install", "--all-agents", ...SETUP], {
     RAGIONEX_API_BASE: mock.base,
     CLAUDE_CONFIG_DIR: claudeHome,
     CODEX_HOME: codexHome,
@@ -117,36 +48,16 @@ test("relocated agent homes hold the rule and reach the server environment", asy
   assert.equal(fs.existsSync(path.join(box.home, ".codex")), false);
 });
 
-test("a missing agent CLI prints the command to run by hand", async (t) => {
-  const box = machine(t, { clis: [], folders: [".codex"] });
-  const result = await box.run(["install", "--agent", "codex"]);
-  assert.equal(result.status, 1);
-  assert.ok(result.stderr.includes(`codex mcp add ${SERVER} --env RAGIONEX_MEMORY_API_KEY=<your-api-key> --env RAGIONEX_API_BASE=http://127.0.0.1:9 -- npx -y @ragionex/memory-mcp@latest`), result.stderr);
-});
-
-test("a failed registration shows the CLI output without the key and keeps the config copy", async (t) => {
-  const mock = await startMock(t);
-  const box = machine(t);
-  fs.writeFileSync(path.join(box.home, ".claude.json"), "{}");
-  const result = await box.run(["install", "--agent", "claude-code", "--api-key", KEY], { RAGIONEX_API_BASE: mock.base, STUB_FAIL: "claude mcp add" });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /simulated failure/);
-  assert.match(result.stderr, /rgx_memory_\*\*\*/);
-  assert.equal(result.stderr.includes(KEY), false);
-  const copies = fs.readdirSync(box.home).filter((name) => name.startsWith(".claude.json.ragionex-backup-"));
-  assert.equal(copies.length, 1);
-  assert.ok(result.stderr.includes(copies[0]));
-});
-
 test("rules files are replaced through symlinks with their mode, and unreadable ones are left alone", async (t) => {
+  const mock = await startMock(t);
   const box = machine(t, { folders: [".claude", "dotfiles"] });
   const target = path.join(box.home, "dotfiles", "CLAUDE.md");
   fs.writeFileSync(target, "# My rules\n");
   fs.chmodSync(target, 0o640);
   const link = path.join(box.home, ".claude", "CLAUDE.md");
   fs.symlinkSync(target, link);
-  const result = await box.run(["install", "--agent", "claude-code"]);
-  assert.equal(result.status, 0, result.stderr);
+  const result = await box.run(["install", "--agent", "claude-code", ...SETUP], { RAGIONEX_API_BASE: mock.base });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   assert.ok(fs.readFileSync(target, "utf-8").startsWith("# My rules\n"));
   assert.ok(rules(target));
@@ -154,9 +65,9 @@ test("rules files are replaced through symlinks with their mode, and unreadable 
   if (process.platform !== "win32") assert.equal(fs.statSync(target).mode & 0o777, 0o640);
 
   const other = machine(t, { folders: [path.join(".claude", "CLAUDE.md")] });
-  const blocked = await other.run(["install", "--agent", "claude-code"]);
+  const blocked = await other.run(["install", "--agent", "claude-code", ...SETUP], { RAGIONEX_API_BASE: mock.base });
   assert.equal(blocked.status, 1);
-  assert.match(blocked.stderr, /Could not read/);
+  assert.match(blocked.stdout, /is not ready for Claude Code: .*could not be read/);
   assert.equal(fs.statSync(path.join(other.home, ".claude", "CLAUDE.md")).isDirectory(), true);
 });
 
@@ -203,76 +114,22 @@ test("uninstall names itself in its hints and reports kept local saves", async (
 });
 
 test("all installer targets launch the latest package tag", async (t) => {
+  const mock = await startMock(t);
   const box = machine(t, { folders: [".claude", ".codex", path.join(".config", "opencode")] });
-  const result = await box.run(["install", "--all-agents"]);
-  assert.equal(result.status, 0, result.stderr);
+  const result = await box.run(["install", "--all-agents", ...SETUP], { RAGIONEX_API_BASE: mock.base });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   const additions = box.calls().filter((call) => call[2] === "add");
   assert.equal(additions.length, 3);
   for (const call of additions) {
-    const launch = call.slice(call.indexOf("--") + 1);
-    const expected = call[0] === "claude" && process.platform === "win32"
+    assert.deepEqual(call.slice(call.indexOf("--") + 1), process.platform === "win32"
       ? ["cmd", "/c", "npx", "-y", "@ragionex/memory-mcp@latest"]
-      : ["npx", "-y", "@ragionex/memory-mcp@latest"];
-    assert.deepEqual(launch, expected);
-  }
-});
-
-test("an existing launch is preserved without a key and upgraded with the same key", async (t) => {
-  const mock = await startMock(t);
-  const box = machine(t);
-  const config = path.join(box.home, ".claude.json");
-  fs.writeFileSync(config, JSON.stringify({
-    mcpServers: {
-      [SERVER]: { command: "npx", args: ["-y", "@ragionex/memory-mcp"], env: { RAGIONEX_MEMORY_API_KEY: KEY } },
-    },
-  }));
-  const original = fs.readFileSync(config, "utf-8");
-  const keyless = await box.run(["install", "--agent", "claude-code"]);
-  assert.equal(keyless.status, 0, keyless.stderr);
-  assert.match(keyless.stdout, /Kept the existing registration/);
-  assert.equal(fs.readFileSync(config, "utf-8"), original);
-  const keyed = await box.run(["install", "--agent", "claude-code", "--api-key", KEY], { RAGIONEX_API_BASE: mock.base });
-  assert.equal(keyed.status, 0, keyed.stderr);
-  const registered = readJson(config).mcpServers[SERVER];
-  assert.deepEqual(registered.args, process.platform === "win32"
-    ? ["/c", "npx", "-y", "@ragionex/memory-mcp@latest"]
-    : ["-y", "@ragionex/memory-mcp@latest"]);
-  assert.equal(registered.env.RAGIONEX_MEMORY_API_KEY, KEY);
-});
-
-test("all registrations retain the normalized address used for key validation", async (t) => {
-  const mock = await startMock(t);
-  const box = machine(t, { folders: [".claude", ".codex", path.join(".config", "opencode")] });
-  const result = await box.run(["install", "--all-agents", "--api-key", KEY], { RAGIONEX_API_BASE: mock.base + "///" });
-  assert.equal(result.status, 0, result.stderr);
-  const additions = box.calls().filter(call => call[2] === "add");
-  assert.equal(additions.length, 3);
-  for (const call of additions) assert.ok(call.includes(`RAGIONEX_API_BASE=${mock.base}`));
-  const claude = readJson(path.join(box.home, ".claude.json")).mcpServers[SERVER].env;
-  assert.equal(claude.RAGIONEX_API_BASE, mock.base);
-  assert.ok(fs.readFileSync(path.join(box.home, ".codex", "config.toml"), "utf-8").includes(`RAGIONEX_API_BASE = "${mock.base}"`));
-  assert.equal(parse(fs.readFileSync(path.join(box.home, ".config", "opencode", "opencode.jsonc"), "utf-8")).mcp[SERVER].environment.RAGIONEX_API_BASE, mock.base);
-  const client = await connect(t, { home: box.home, env: claude });
-  const connection = await client.callTool({ name: "ragionex_memory_connection", arguments: {} });
-  assert.ok(!connection.isError, text(connection));
-  assert.equal(mock.state.requests.filter(request => request.url === "/v1/memory/identity").length, 2);
-});
-
-test("keyless registration carries an override and omits an unset override", async (t) => {
-  for (const base of ["http://127.0.0.1:9/", undefined]) {
-    const box = machine(t);
-    const result = await box.run(["install", "--agent", "claude-code"], { RAGIONEX_API_BASE: base });
-    assert.equal(result.status, 0, result.stderr);
-    const environment = readJson(path.join(box.home, ".claude.json")).mcpServers[SERVER].env;
-    assert.equal(environment.RAGIONEX_API_BASE, base === undefined ? undefined : "http://127.0.0.1:9");
-    assert.equal(Object.hasOwn(environment, "RAGIONEX_MEMORY_API_KEY"), false);
+      : ["npx", "-y", "@ragionex/memory-mcp@latest"]);
   }
 });
 
 test("an invalid install address is refused before any CLI or rule change", async (t) => {
   for (const args of [
-    ["install", "--agent", "claude-code"],
-    ["install", "--agent", "claude-code", "--api-key", KEY],
+    ["install", "--agent", "claude-code", ...SETUP],
   ]) {
     const box = machine(t);
     const result = await box.run(args, { RAGIONEX_API_BASE: "http://api.example.test" });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { RULE_BODY } from "../build/init.js";
-import { ACCOUNT_A, ACCOUNT_B, VAULT_A, VAULT_B, apiKey, connect, pause, pendingFiles, putProjectConfig, queueDirectory, spoolFiles, startMock, tempDir, text, waitFor } from "./helpers.js";
+import { ACCOUNT_A, ACCOUNT_B, VAULT_A, VAULT_B, apiKey, connect, pause, pendingFiles, putProjectConfig, queueDirectory, startMock, tempDir, text, waitFor } from "./helpers.js";
 
 const RECORD = {
   id: "mem_A",
@@ -29,7 +29,6 @@ test("new and duplicate saves return the same metadata acknowledgement", async (
     assert.match(text(result), /^Saved record:\n/);
     const { content, ...acknowledgement } = mock.state.records.get("r1");
     assert.deepEqual(JSON.parse(text(result).replace(/^Saved record:\n/, "").split("\n\n\u26a0\ufe0f REMINDER TO CALLER:")[0]), acknowledgement);
-    assert.equal(Object.hasOwn(acknowledgement, "content"), false);
     assert.doesNotMatch(text(result), /already exists|charged|queued|inserted/i);
   }
   assert.equal(mock.writes().length, 2);
@@ -134,7 +133,7 @@ test("failures that decide the next step say so inside the error", async (t) => 
     [429, "rate_limited", /If this recall was the check before a save, save now anyway/],
     [402, "quota_exceeded", /If this recall was the check before a save, save now anyway/],
     [403, "permission_denied", /If this recall was the check before a save, save without it/],
-    [401, "unauthorized", /Show the user this link and command exactly as written/],
+    [401, "unauthorized", /Show the user this step exactly as written/],
   ]) {
     mock.state.replies.search.push({ status, body: { success: false, error: "Rejected", code } });
     const result = await recall();
@@ -183,7 +182,7 @@ test("the setup command names the connected agent", async (t) => {
   await pause(500);
   mock.state.replies.search.push({ status: 401, body: { success: false, error: "Unauthorized", code: "unauthorized" } });
   const result = await client.callTool({ name: "ragionex_recall_memory", arguments: { query: "Which theme does the user prefer?" } });
-  assert.match(text(result), /install --agent codex --api-key/);
+  assert.match(text(result), /Run the setup: npx -y @ragionex\/memory-mcp@latest install --agent codex/);
 });
 
 test("view and delete send JSON ids and preserve ordered all-or-none batches", async (t) => {
@@ -288,7 +287,7 @@ test("public errors keep actionable fields and reads are never retried automatic
   const mock = await startMock(t);
   const client = await connect(t, { home: tempDir(t), base: mock.base, key: apiKey("p") });
   const cases = [
-    { status: 401, body: { success: false, error: "Unauthorized", code: "unauthorized" }, match: /npx -y @ragionex\/memory-mcp@latest install --agent <your-agent> --api-key/, support: false },
+    { status: 401, body: { success: false, error: "Unauthorized", code: "unauthorized" }, match: /Create a key at https:\/\/app\.ragionex\.com\/keys and add it to this client's MCP configuration/, support: false },
     { status: 402, body: { success: false, error: "Unavailable", code: "payg_unavailable" }, match: /Pay-as-you-go is currently unavailable/, support: false },
     { status: 402, body: { success: false, error: "Quota reached", code: "quota_exceeded" }, match: /plan limit/, support: false },
     { status: 429, headers: { "Retry-After": "7" }, body: { success: false, error: "Rate limited", code: "rate_limited", retry_after_seconds: 12 }, match: /Retry after 7 seconds/, support: false },

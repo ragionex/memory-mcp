@@ -11,30 +11,23 @@ import { findRecallSearch, getRecallRemainder, storeRecallPage } from "./recall-
 const command = process.argv[2];
 if (command === "--version" || command === "-v") {
     console.log(VERSION);
-    process.exit(0);
 }
-if (command !== undefined) {
+else if (command !== undefined) {
     const cli = await import("./init.js");
-    if (command === "install") {
-        await cli.runInstall(process.argv.slice(3));
-    }
-    else if (command === "uninstall") {
-        await cli.runUninstall(process.argv.slice(3));
-    }
-    else if (command === "--help" || command === "-h") {
-        console.log(cli.usage());
-    }
-    else {
-        console.error(`Unknown command: ${command}`);
-        console.error(cli.usage());
-        process.exit(2);
-    }
-    process.exit(0);
+    process.exitCode = await cli.runCommand(command, process.argv.slice(3));
 }
 const API_BASE = process.env.RAGIONEX_API_BASE ?? DEFAULT_API_BASE;
 const REQUEST_TIMEOUT_MS = 120_000;
 const RECORD_TEXT_BUDGET_BYTES = 60_000;
 let installAgent = "<your-agent>";
+function keySetupStep() {
+    return installAgent === "<your-agent>"
+        ? "Create a key at https://app.ragionex.com/keys and add it to this client's MCP configuration as RAGIONEX_MEMORY_API_KEY."
+        : `Run the setup: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent}`;
+}
+function importOffer(rulesFile) {
+    return `This Vault has no memories yet. Offer the user, in one sentence, to import what you already know about them and their projects. Only if they agree: read ${rulesFile ?? "the user's global agent rules file"}, the rules file of this project and your own local memory files for this project. Save each lasting preference, decision and project fact from them as its own memory, with the recall before every save, and skip the Ragionex Memory block, anything temporary and anything already saved. Leave those files unchanged. Then call ragionex_list_memories to confirm what was saved, and tell the user in a few lines what was saved and what was skipped.`;
+}
 const TELL_USER = " Tell the user both the problem and its fix:";
 function remind(error, guidance) {
     if (error instanceof ApiError && guidance) {
@@ -85,7 +78,7 @@ async function requestContext() {
     }
     const selection = readConfig(workingFolder, process.env.RAGIONEX_MEMORY_API_KEY || undefined);
     if (selection.key === undefined) {
-        throw new ApiError(`RAGIONEX_MEMORY_API_KEY is not set. Get a key at https://app.ragionex.com/keys and run: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent} --api-key rgx_memory_...`, 401, "missing_api_key");
+        throw new ApiError(`RAGIONEX_MEMORY_API_KEY is not set. ${keySetupStep()} Then restart your agent.`, 401, "missing_api_key");
     }
     return { ...selection, key: selection.key, apiBase: normalizeApiBase(API_BASE) };
 }
@@ -152,7 +145,7 @@ async function api(opts, context) {
         }
         let guidance;
         if (res.status === 401) {
-            guidance = `The API key is invalid or revoked. Get a key at https://app.ragionex.com/keys and run: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent} --api-key rgx_memory_... Then restart your agent. Show the user this link and command exactly as written.`;
+            guidance = `The API key is invalid or revoked. ${keySetupStep()} Then restart your agent. Show the user this step exactly as written.`;
         }
         else if (res.status === 403) {
             guidance = `Do not try another Vault or key.${TELL_USER} this key, or their access to the selected Vault, does not allow this action, so it was not carried out; to fix it, they can ask the Vault's owner for this permission or use a key that has it.`;
@@ -318,6 +311,15 @@ server.registerTool("ragionex_memory_connection", {
     const targetAvailable = identity === null
         ? null
         : identity.vaults.some(vault => vault.vault_id === target);
+    let empty = false;
+    if (identity?.vaults.find(vault => vault.vault_id === target)?.permissions.includes("read")) {
+        try {
+            const page = await api({ method: "GET", path: "/v1/memory/list?limit=1", wakeQueue: false }, context);
+            empty = Array.isArray(page.memories) && page.memories.length === 0;
+        }
+        catch {
+        }
+    }
     const data = {
         identity,
         target_vault_id: target,
@@ -330,9 +332,14 @@ server.registerTool("ragionex_memory_connection", {
             ? "Pending-save sync started in the background. This does not confirm that pending saves are saved."
             : "No new sync started. Check pending saves, retry time, and storage errors in the queue status.",
     };
+    const content = [{ type: "text", text: JSON.stringify(data, null, 2) }];
+    if (empty) {
+        const { rulesFileForClient } = await import("./init.js");
+        content.push({ type: "text", text: agentReminder([importOffer(rulesFileForClient(server.server.getClientVersion()))]) });
+    }
     return {
         ...((error || targetAvailable === false) ? { isError: true } : {}),
-        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+        content,
     };
 });
 server.registerTool("ragionex_save_memory", {
@@ -824,7 +831,7 @@ async function main() {
                 const { refreshForClient, agentKeyForClient } = await import("./init.js");
                 const client = server.server.getClientVersion();
                 installAgent = agentKeyForClient(client) ?? installAgent;
-                refreshForClient(client);
+                void refreshForClient(client);
             }
             catch (error) {
                 console.error(`[ragionex-memory-mcp] Rule refresh failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -836,7 +843,9 @@ async function main() {
     await server.connect(transport);
     console.error("[ragionex-memory-mcp] Connected via stdio.");
 }
-main().catch((err) => {
-    console.error("[ragionex-memory-mcp] Fatal:", err);
-    process.exit(1);
-});
+if (command === undefined) {
+    main().catch((err) => {
+        console.error("[ragionex-memory-mcp] Fatal:", err);
+        process.exit(1);
+    });
+}

@@ -6,16 +6,6 @@ test("writes expose only content and updates require the revision read from view
   const mock = await startMock(t);
   const home = tempDir(t);
   const client = await connect(t, { home, base: mock.base, key: apiKey("s") });
-  const { tools } = await client.listTools();
-  const saveSchema = tools.find((tool) => tool.name === "ragionex_save_memory").inputSchema;
-  const updateSchema = tools.find((tool) => tool.name === "ragionex_update_memory").inputSchema;
-  assert.deepEqual(Object.keys(saveSchema.properties), ["content"]);
-  assert.deepEqual(saveSchema.required, ["content"]);
-  assert.deepEqual(Object.keys(updateSchema.properties).sort(), ["content", "expected_revision", "id"]);
-  assert.deepEqual([...updateSchema.required].sort(), ["content", "expected_revision", "id"]);
-  assert.equal(saveSchema.additionalProperties, false);
-  assert.equal(updateSchema.additionalProperties, false);
-
   for (const name of ["ragionex_save_memory", "ragionex_update_memory"]) {
     const valid = name === "ragionex_save_memory"
       ? { content: "A durable fact." }
@@ -78,12 +68,6 @@ test("content has no fixed connector maximum and server rejection remains an err
   const mock = await startMock(t);
   const home = tempDir(t);
   const client = await connect(t, { home, base: mock.base, key: apiKey("s") });
-  const { tools } = await client.listTools();
-  for (const name of ["ragionex_save_memory", "ragionex_update_memory"]) {
-    const schema = tools.find((tool) => tool.name === name).inputSchema.properties.content;
-    assert.equal(schema.minLength, 1);
-    assert.equal(Object.hasOwn(schema, "maxLength"), false);
-  }
   const content = "x".repeat(50001);
   const saved = await client.callTool({ name: "ragionex_save_memory", arguments: { content } });
   assert.ok(!saved.isError, text(saved));

@@ -14,7 +14,7 @@ Keep each project in its own Vault, give every key only the access it needs, and
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/d79f3MDVd4)
 
-<a href="https://app.ragionex.com/keys"><b>Get a Free Key</b></a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/docs">Documentation</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/pricing">Pricing</a>
+<a href="https://ragionex.com/setup"><b>Set Up in One Line</b></a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/docs">Documentation</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/pricing">Pricing</a>
 
 </div>
 
@@ -36,27 +36,33 @@ Keep each project in its own Vault, give every key only the access it needs, and
 
 **Safe and Private.** Memories are stored in the EU from the first save, and their text is encrypted with AES-256. They are never sent to an outside AI service and never used to train AI models. Saves are written to disk before they are sent, so an outage only delays them.
 
-**Works Where You Work.** One command sets up Claude Code, Codex or OpenCode. Claude Desktop, Cursor, Cline and other MCP clients connect too.
+**Works Where You Work.** One line sets up Claude Code (in a terminal or the Claude desktop app), Codex or OpenCode on Windows, macOS and Linux. Claude Desktop, Cursor, Cline and other MCP clients connect too.
 
 ## Quick Start
 
-**1. Get a Key.** Sign in at [app.ragionex.com/keys](https://app.ragionex.com/keys) and create a free key, no credit card needed. Give your main agent's key Read, Create, Update and Delete, so it can also clean up. The key is shown once.
+**1. Ask Your Agent.** Paste this line into Claude Code, Codex or OpenCode:
 
-**2. Install.** Requires Node.js 18 or later.
-
-```bash
-npx -y @ragionex/memory-mcp@latest install --agent claude-code
+```text
+Set up Ragionex Memory for me: run npx -y @ragionex/memory-mcp@latest install and follow its instructions.
 ```
 
-For Codex or OpenCode, use `--agent codex` or `--agent opencode` instead; for every installed agent at once, use `--all-agents` in its place. The installer asks for the key at a hidden prompt and checks it before changing anything.
+Your agent runs the setup and asks for your email address. Type the one-time code we send you into the chat. There is no key to copy: the setup creates one for this agent and stores it in the agent's settings. A new email address gets a free account, no credit card needed.
 
-**3. Restart and Check.** Quit and reopen the agent, then ask it to *check my Ragionex Memory connection*. It shows the selected Vault, every Vault the key can use and its permissions. From here on, just work.
+**Or Use a Terminal.** Requires Node.js 18 or later. The setup asks for your email address and the code:
 
-> **For AI Assistants Setting This Up:** run the `install` command above with `--agent` set to the agent the user wants memory in (`claude-code`, `codex` or `opencode`). A noninteractive run never waits for input; without a key, pass the follow-up steps it prints to the user. Then tell the user to restart their agent, which you cannot do yourself. Do not report working memory until a valid key is configured.
+```bash
+npx -y @ragionex/memory-mcp@latest install
+```
+
+With several agents installed, add `--agent claude-code`, `--agent codex` or `--agent opencode`, or `--all-agents` to connect them all with one code.
+
+**2. Restart and Check.** Quit and reopen the agent once, then ask it to *check my Ragionex Memory connection*. It shows your Vaults and permissions, and offers to bring in what it already knows from your rules files and its own notes. From here on, just work.
+
+> **For AI Assistants Setting This Up:** run `npx -y @ragionex/memory-mcp@latest install --agent <claude-code|codex|opencode>`, naming yourself, and follow the next step it prints: ask the user for their email address and run it again with `--email`, then ask for the one-time code from the email and run it with `--email` and `--code`. Each run ends at once; nothing waits in the background. Never ask the user for an API key. When it prints that Ragionex Memory is ready, tell the user to restart you once.
 
 ### Other MCP Clients
 
-Claude Desktop, Cursor, Cline and other clients that run local MCP servers use the same tools. Add the server to the client's user-global MCP config:
+Claude Desktop, Cursor, Cline and other clients that run local MCP servers use the same tools. Create a key at [app.ragionex.com/keys](https://app.ragionex.com/keys) and add the server to the client's user-global MCP config:
 
 ```json
 {
@@ -115,12 +121,13 @@ A new account starts with **My vault** as its default, and every project without
 - A key belongs to your account and works in every Vault you own or that is shared with you.
 - Give each key only what its agent needs. A key with Read only can recall but never change anything.
 - Keys are created with fixed permissions and revoked in the [Dashboard](https://app.ragionex.com/keys).
+- The setup creates one key per agent, named after the agent and the setup date. Running it again creates another key; earlier keys stay listed in the [Dashboard](https://app.ragionex.com/keys), where you can revoke them.
 
 ## Free Plan
 
 | Requests | Memory Size | Stored Memories | Vaults | Keys | Teammates |
 |:---:|:---:|:---:|:---:|:---:|:---:|
-| 10,000 per 30 days | 10,000 characters | Unlimited | 2 | 2 | 1 per Vault |
+| 10,000 per 30 days | 10,000 characters | Unlimited | 2 | 100 | 1 per Vault |
 
 Saving, editing and restoring a memory each cost 1 request, and so does each search page fetched from the service. Browsing, viewing, deleting, the trash, version history, status checks and export are free. Free is for personal projects and evaluation and is in early access, so its limits may change. Commercial use is not permitted on Free; [Pro](https://ragionex.com/pricing) is coming soon.
 
@@ -152,17 +159,17 @@ Every record has `id`, `vault_id`, `content`, `created_at`, `updated_at`, `statu
 
 | Setting | Details |
 |---|---|
-| `RAGIONEX_MEMORY_API_KEY` | The agent's key. `install` takes it from `--api-key`, this variable or a hidden prompt, in that order, and stores it in the agent's MCP registration |
+| `RAGIONEX_MEMORY_API_KEY` | The agent's key. `install` creates it after you confirm your email with a one-time code and stores it in the agent's MCP registration |
 | `RAGIONEX_API_BASE` | Optional API address, default `https://api.ragionex.com` |
 | Relocated Agent Homes | `install` and `uninstall` follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `XDG_CONFIG_HOME` |
 | Tool Timeout | Allow each MCP tool call more than 120 seconds, the connector's own request deadline, so a slow request still ends with its result or clear guidance |
-| Windows | Claude Code is registered with the `cmd /c` wrapper it needs for `npx` servers. Run Codex and OpenCode under WSL |
+| Windows | Every agent is registered with the `cmd /c` wrapper that `npx` needs. Claude Code is found even when only the Claude desktop app has it. In WSL, run the setup inside the Linux environment where the agent runs |
 | Diagnostics | The server writes to stderr; see your client's MCP server log |
 
 - **Project Folder.** The folder the agent reports: Claude Code's project directory, the client's single workspace root, or the folder the server started in.
-- **Updating.** Run `install` again with `@latest` and your agent, then restart the agent. A run without a key keeps the existing registration and key.
+- **Updating.** Nothing to do: the agent starts the latest version each time it launches, and the rule refreshes itself. Running `install` again sends a new code and gives the agent a new key; earlier keys stay listed in the [Dashboard](https://app.ragionex.com/keys), where you can revoke them.
 - **The Memory Rule.** It lives between `ragionex-memory-mcp:priority-rule` markers in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` or `~/.config/opencode/AGENTS.md`, and refreshes itself after an upgrade. To keep your own version, edit the begin marker and the server leaves the block alone. See the [Memory Rule Guide](https://ragionex.com/docs/guides/config-rule).
-- **Uninstalling.** `npx -y @ragionex/memory-mcp@latest uninstall --agent claude-code` removes the registration and the rule; a rule you froze by editing its begin marker stays and is removed by hand. Saves that have not synced yet stay on disk.
+- **Uninstalling.** `npx -y @ragionex/memory-mcp@latest uninstall --agent claude-code` removes the registration and the rule; a rule you froze by editing its begin marker stays and is removed by hand. Saves that have not synced yet stay on disk. The agent's key stays in your account; revoke it in the [Dashboard](https://app.ragionex.com/keys) if you do not plan to reconnect.
 
 </details>
 
@@ -191,7 +198,8 @@ Every record has `id`, `vault_id`, `content`, `created_at`, `updated_at`, `statu
 | Symptom | Solution |
 |---|---|
 | The agent does not use memory or says the tools are unavailable | Restart the agent after installing; MCP servers load at startup. Then ask it to check the connection |
-| "The API key is invalid or revoked" | Create a new key and run `install` again; the agent shows the exact command |
+| "The API key is invalid or revoked" | Run the setup again; the agent shows the exact command |
+| No code email arrives | Check the spam folder, then run the setup again for a new code; a new code replaces the previous one |
 | A save is "queued" or "not confirmed yet" | The service was unreachable or a limit was reached. The save waits on this machine and is sent automatically; the connection check shows anything still waiting |
 | Something saved a moment ago is not found | New records are briefly `processing`; ask the agent to check its status |
 | A permission error | The key, or your access to a shared Vault, lacks that permission. Use a key that has it, or ask the Vault's owner |

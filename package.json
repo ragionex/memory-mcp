@@ -1,6 +1,6 @@
 {
   "name": "@ragionex/memory-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "mcpName": "io.github.ragionex/memory-mcp",
   "description": "MCP server for Ragionex Memory - persistent memory for AI agents.",
   "keywords": [

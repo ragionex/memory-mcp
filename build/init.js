@@ -6,7 +6,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { applyEdits, createScanner, parseTree } from "jsonc-parser";
 import { isMissing, replaceFile, syncDirectory, writeNewPrivateFile } from "./durable-fs.js";
-import { DEFAULT_API_BASE, USER_AGENT, identitySchema, normalizeApiBase } from "./memory-contract.js";
+import { ApiError, DEFAULT_API_BASE, USER_AGENT, identitySchema, normalizeApiBase } from "./memory-contract.js";
 import { SPOOL_DIR, countStoredSaves } from "./offline-queue.js";
 const MARKER_BEGIN = "<!-- ragionex-memory-mcp:priority-rule:begin -->";
 const MARKER_END = "<!-- ragionex-memory-mcp:priority-rule:end -->";
@@ -14,9 +14,15 @@ const STRICT_BEGIN_RE = /^<!-- ragionex-memory-mcp:priority-rule:begin -->$/m;
 const STRICT_END_RE = /^<!-- ragionex-memory-mcp:priority-rule:end -->$/m;
 const LOOSE_RE = /ragionex-memory-mcp:priority-rule/;
 const SERVER_NAME = "ragionex-memory-mcp";
-const SERVER_COMMAND = ["npx", "-y", "@ragionex/memory-mcp@latest"];
-const KEY_CHECK_TIMEOUT_MS = 10_000;
+const SERVER_COMMAND = [...(process.platform === "win32" ? ["cmd", "/c"] : []), "npx", "-y", "@ragionex/memory-mcp@latest"];
+const SETUP_COMMAND = "npx -y @ragionex/memory-mcp@latest";
+const AGENT_SETUP = "Set up Ragionex Memory for me: run npx -y @ragionex/memory-mcp@latest install and follow its instructions.";
+const REQUEST_TIMEOUT_MS = 15_000;
 const API_KEY_FORMAT = /^rgx_memory_[A-Za-z0-9_-]+$/;
+const EMAIL_FORMAT = /^[A-Za-z0-9!#$%&'*+\/=?^_`{|}~.-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]+$/;
+const CODE_FORMAT = /^[2-9A-HJ-NP-Z]{8}$/;
+const TERMS_LINE = "Setup creates a free account if needed and an API key for your agent. By entering the one-time code, you agree to the Ragionex Terms of Service (https://ragionex.com/terms). Our Privacy Policy (https://ragionex.com/privacy) explains how we use your personal data.";
+const KEYS_PAGE = "https://app.ragionex.com/keys";
 function safeExists(p) {
     try {
         return fs.existsSync(p);
@@ -29,6 +35,135 @@ function openCodeConfig(dir) {
     const json = path.join(dir, "opencode.json");
     const jsonc = path.join(dir, "opencode.jsonc");
     return safeExists(json) && !safeExists(jsonc) ? json : jsonc;
+}
+function codexRulesFile(codexHome) {
+    const override = path.join(codexHome, "AGENTS.override.md");
+    try {
+        if (fs.readFileSync(override, "utf-8").trim())
+            return override;
+    }
+    catch {
+    }
+    return path.join(codexHome, "AGENTS.md");
+}
+function processLookup() {
+    if (process.platform === "linux") {
+        return (pid) => {
+            let stat;
+            try {
+                stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
+            }
+            catch {
+                return undefined;
+            }
+            let file = null;
+            try {
+                file = fs.readlinkSync(`/proc/${pid}/exe`);
+            }
+            catch {
+            }
+            const parent = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+            return { parent, name: file === null ? "" : path.basename(file), file: () => file };
+        };
+    }
+    const lines = (command, args) => {
+        const listed = spawnSync(command, args, {
+            stdio: ["ignore", "pipe", "ignore"],
+            encoding: "utf-8",
+            timeout: 20_000,
+            windowsHide: true,
+        });
+        return (listed.stdout ?? "").split(/\r?\n/);
+    };
+    const table = new Map();
+    if (process.platform === "darwin") {
+        for (const line of lines("/bin/ps", ["-A", "-o", "pid=", "-o", "ppid=", "-o", "ucomm="])) {
+            const fields = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+            if (!fields)
+                continue;
+            const pid = fields[1];
+            const name = fields[3].trim();
+            table.set(Number(pid), {
+                parent: Number(fields[2]),
+                name,
+                file: () => lines("/usr/sbin/lsof", ["-a", "-p", pid, "-d", "txt", "-Fn"])
+                    .filter((field) => field.startsWith("n"))
+                    .map((field) => field.slice(1))
+                    .find((file) => path.basename(file) === name) ?? null,
+            });
+        }
+    }
+    else if (process.platform === "win32") {
+        const script = "try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}; " +
+            "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.ExecutablePath)\" }";
+        const powershell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        for (const line of lines(powershell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")])) {
+            const [pid = "", parent = "", file = ""] = line.split("\t");
+            if (!/^\d+$/.test(pid) || !/^\d+$/.test(parent))
+                continue;
+            table.set(Number(pid), { parent: Number(parent), name: path.basename(file), file: () => file || null });
+        }
+    }
+    return (pid) => table.get(pid);
+}
+function runningClaudeCode() {
+    if (process.env.CLAUDECODE !== "1")
+        return null;
+    const windows = process.platform === "win32";
+    const program = windows ? "claude.exe" : "claude";
+    const named = (name) => (windows ? name.toLowerCase() : name) === program;
+    const lookup = processLookup();
+    let pid = process.ppid;
+    for (let level = 0; level < 12 && pid > 1; level++) {
+        const entry = lookup(pid);
+        if (entry === undefined)
+            return null;
+        if (named(entry.name)) {
+            const file = entry.file();
+            if (file === null || !named(path.basename(file)) || !runnable(file))
+                return null;
+            const version = runCli(file, ["--version"]);
+            return version.ok && version.detail.includes("Claude Code") ? file : null;
+        }
+        pid = entry.parent;
+    }
+    return null;
+}
+function claudeCodeCopies(home) {
+    const program = process.platform === "win32" ? "claude.exe" : "claude";
+    const dataFolders = process.platform === "win32"
+        ? [
+            process.env.APPDATA || path.join(home, "AppData", "Roaming"),
+            process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"),
+        ]
+        : process.platform === "darwin"
+            ? [path.join(home, "Library", "Application Support")]
+            : [process.env.XDG_CONFIG_HOME || path.join(home, ".config")];
+    const list = (folder) => {
+        try {
+            return fs.readdirSync(folder);
+        }
+        catch {
+            return [];
+        }
+    };
+    const copies = [];
+    for (const data of dataFolders) {
+        const roots = [
+            path.join(data, "Claude", "claude-code"),
+            ...list(path.join(data, "Claude-Data")).map((folder) => path.join(data, "Claude-Data", folder, "claude-code")),
+        ];
+        for (const root of roots) {
+            for (const version of list(root)) {
+                copies.push({ version, file: path.join(root, version, program) });
+                for (const build of list(path.join(root, version))) {
+                    copies.push({ version, file: path.join(root, version, build, program) });
+                }
+            }
+        }
+    }
+    copies.sort((a, b) => b.version.localeCompare(a.version, "en", { numeric: true }));
+    return [path.join(home, ".local", "bin", program), ...copies.map((copy) => copy.file)];
 }
 function agentRegistry() {
     const home = os.homedir();
@@ -55,9 +190,10 @@ function agentRegistry() {
                 "user",
                 ...env.flatMap((pair) => ["-e", pair]),
                 "--",
-                ...(process.platform === "win32" ? ["cmd", "/c"] : []),
                 ...SERVER_COMMAND,
             ],
+            runningCli: runningClaudeCode,
+            extraClis: () => claudeCodeCopies(home),
             removeArgs: ["mcp", "remove", SERVER_NAME, "--scope", "user"],
             registrationPresent: (content) => {
                 const config = JSON.parse(content);
@@ -83,7 +219,9 @@ function agentRegistry() {
             folderSource: "unavailable",
             homeVariable: "CODEX_HOME",
             footprint: codexHome,
-            rulesFile: path.join(codexHome, "AGENTS.md"),
+            get rulesFile() {
+                return codexRulesFile(codexHome);
+            },
             configFile: path.join(codexHome, "config.toml"),
             cli: "codex",
             addArgs: (env) => [
@@ -209,43 +347,59 @@ export const RULE_BODY = [
 function ruleBlock() {
     return `${MARKER_BEGIN}\n${RULE_BODY}\n${MARKER_END}`;
 }
-function parseArgs(argv) {
+class Stop extends Error {
+    status;
+    constructor(status) {
+        super(`exit ${status}`);
+        this.status = status;
+    }
+}
+function parseArgs(argv, command) {
     const args = { allAgents: false };
+    const value = (flag, next) => {
+        if (!next) {
+            console.error(`${flag} needs a value.`);
+            throw new Stop(2);
+        }
+        return next;
+    };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a.startsWith("--agent="))
             args.agent = a.slice("--agent=".length);
-        else if (a === "--agent") {
-            args.agent = argv[++i];
-            if (!args.agent) {
-                console.error("--agent needs a value.");
-                process.exit(2);
-            }
-        }
-        else if (a.startsWith("--api-key="))
-            args.apiKey = a.slice("--api-key=".length);
-        else if (a === "--api-key") {
-            args.apiKey = argv[++i];
-            if (!args.apiKey) {
-                console.error("--api-key needs a value.");
-                process.exit(2);
-            }
-        }
+        else if (a === "--agent")
+            args.agent = value(a, argv[++i]);
         else if (a === "--all-agents")
             args.allAgents = true;
+        else if (command === "install" && a.startsWith("--email="))
+            args.email = a.slice("--email=".length);
+        else if (command === "install" && a === "--email")
+            args.email = value(a, argv[++i]);
+        else if (command === "install" && a.startsWith("--code="))
+            args.code = a.slice("--code=".length);
+        else if (command === "install" && a === "--code")
+            args.code = value(a, argv[++i]);
+        else if (a === "--api-key" || a.startsWith("--api-key=")) {
+            console.error(`--api-key is no longer used: the setup confirms your email with a one-time code and creates the key itself. Run: ${SETUP_COMMAND} ${command}`);
+            throw new Stop(2);
+        }
         else if (a === "--help" || a === "-h") {
             console.log(usage());
-            process.exit(0);
+            throw new Stop(0);
         }
         else {
             console.error(`Unknown argument: ${redact(a)}`);
             console.error(usage());
-            process.exit(2);
+            throw new Stop(2);
         }
+    }
+    if (args.code !== undefined && args.email === undefined) {
+        console.error("--code needs --email with the address the code was sent to.");
+        throw new Stop(2);
     }
     return args;
 }
-export function usage() {
+function usage() {
     const keys = enabledAgents()
         .map((a) => a.key)
         .join(" | ");
@@ -256,43 +410,23 @@ export function usage() {
   npx -y @ragionex/memory-mcp@latest --version
 
 (none)     Starts the MCP server on stdio; agents launch it this way.
-install    Registers this MCP server with one coding agent and writes the
-           Ragionex Memory priority rule into that agent's global rules file.
-uninstall  Reverses both. Saves that have not synced yet stay on disk.
+install    Connects a coding agent: confirms your email with a one-time code,
+           creates a key for this agent, registers this MCP server and writes
+           the Ragionex Memory rule into the agent's global rules file.
+uninstall  Removes the registration and the rule. Saves that have not synced
+           yet stay on disk.
 
 Flags:
-  --agent <name>    Which agent to use: ${keys}
-                    Omitted: used automatically if exactly one is detected.
-  --api-key <key>   Install only. Your Ragionex Memory API key
-                    (https://app.ragionex.com/keys). OPTIONAL: read from
-                    RAGIONEX_MEMORY_API_KEY if omitted, else prompted. A key is
-                    checked with the service before anything changes. Without a
-                    key, an existing registration is kept unchanged; a first
-                    installation can proceed keyless. Re-run with a key to set
-                    or replace the registration.
-  --all-agents      Use every detected agent instead of just one.
-  --help, -h        Show this help.
-
-Note: an API key passed on the command line is recorded in your shell history.
-The key is stored in the agent's config file either way, so this is not a new
-exposure, but you can avoid it by exporting RAGIONEX_MEMORY_API_KEY instead or
-by letting the installer prompt you. Keys can be revoked and rotated anytime.
+  --agent <name>     Which agent to use: ${keys}
+                     Omitted: used automatically if exactly one is detected.
+  --all-agents       Use every detected agent instead of just one.
+  --email <address>  Install only. The email address of your Ragionex account;
+                     a new free account is created if it has none. Asked for in
+                     a terminal; required when an AI agent runs the setup.
+  --code <code>      Install only, with --email: the one-time code from the
+                     email. Without it, a new code is sent.
+  --help, -h         Show this help.
 `;
-}
-function askHidden(question) {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        terminal: true,
-    });
-    return new Promise((resolve) => {
-        rl.question(question, (answer) => {
-            rl.close();
-            process.stdout.write("\n");
-            resolve(answer.trim());
-        });
-        rl._writeToOutput = () => { };
-    });
 }
 function noAgentsDetected(command) {
     const names = enabledAgents()
@@ -303,7 +437,7 @@ function noAgentsDetected(command) {
         (command === "install"
             ? "Install one of them first, or name it explicitly with --agent <name>."
             : "Name the agent explicitly with --agent <name>."));
-    process.exit(2);
+    throw new Stop(2);
 }
 async function resolveTargets(args, command) {
     const registry = enabledAgents();
@@ -311,76 +445,30 @@ async function resolveTargets(args, command) {
         const hit = registry.find((a) => a.key === args.agent);
         if (!hit) {
             console.error(`Unknown --agent "${args.agent}". Supported: ${registry.map((a) => a.key).join(", ")}`);
-            process.exit(2);
+            throw new Stop(2);
         }
         return [hit];
     }
     const detected = detectedAgents();
     if (detected.length === 0)
         noAgentsDetected(command);
-    if (args.allAgents)
-        return detected;
-    if (detected.length === 1)
+    if (args.allAgents || detected.length === 1)
         return detected;
     if (!process.stdin.isTTY) {
-        console.error("Several supported agents were detected. Re-run naming one:");
-        for (const a of detected) {
-            console.error(`  npx -y @ragionex/memory-mcp@latest ${command} --agent ${a.key}${command === "install" ? " --api-key <your-key>" : ""}`);
-        }
-        console.error(`  ...or pass --all-agents to ${command === "install" ? "install into" : "uninstall from"} all of them.`);
-        process.exit(2);
+        console.error("Several supported agents were found. Run this again naming the agent that should get Ragionex Memory (AI agents: name yourself):");
+        for (const a of detected)
+            console.error(`  ${SETUP_COMMAND} ${command} --agent ${a.key}`);
+        console.error(`  ...or pass --all-agents to ${command === "install" ? "connect" : "uninstall from"} all of them.`);
+        throw new Stop(2);
     }
     console.log("Several supported agents were detected:");
     detected.forEach((a, i) => console.log(`  ${i + 1}) ${a.displayName}`));
     const pick = Number((await ask(`Which one? [1-${detected.length}] `)).trim());
     if (!Number.isInteger(pick) || pick < 1 || pick > detected.length) {
         console.error("Invalid choice.");
-        process.exit(2);
+        throw new Stop(2);
     }
     return [detected[pick - 1]];
-}
-async function resolveApiKey(args) {
-    const fromFlag = args.apiKey?.trim();
-    if (fromFlag)
-        return fromFlag;
-    const fromEnv = process.env.RAGIONEX_MEMORY_API_KEY?.trim();
-    if (fromEnv)
-        return fromEnv;
-    if (!process.stdin.isTTY)
-        return null;
-    const typed = await askHidden("Ragionex Memory API key (hidden, press Enter to add it later): ");
-    return typed || null;
-}
-async function keyAccepted(apiKey, apiBase) {
-    let response;
-    try {
-        response = await fetch(`${apiBase}/v1/memory/identity`, {
-            headers: { "X-API-Key": apiKey, Accept: "application/json", "User-Agent": USER_AGENT },
-            signal: AbortSignal.timeout(KEY_CHECK_TIMEOUT_MS),
-            redirect: "error",
-        });
-    }
-    catch (err) {
-        const reason = err instanceof Error && err.cause instanceof Error ? err.cause.message : errMsg(err);
-        console.error(`Warning: the API key could not be checked (${reason}); continuing.`);
-        return true;
-    }
-    if (response.status === 401) {
-        console.error("The API key was rejected as invalid or revoked, so nothing was changed. Check it at https://app.ragionex.com/keys.");
-        return false;
-    }
-    const parsed = identitySchema.safeParse(response.ok ? await response.json().catch(() => undefined) : undefined);
-    if (!parsed.success) {
-        console.error(`Warning: the API key could not be checked (HTTP ${response.status}); continuing.`);
-        return true;
-    }
-    console.log(`Key verified (permissions: ${parsed.data.key.permissions.join(", ") || "none"}).`);
-    return true;
-}
-function keyFollowUp(agent) {
-    return (`${agent.displayName}: installed WITHOUT an API key, so memory tools will not work yet.\n` +
-        `  1. Get a free key: https://app.ragionex.com/keys\n` +
-        `  2. Run: npx -y @ragionex/memory-mcp@latest install --agent ${agent.key} --api-key rgx_memory_...`);
 }
 function stripMarkers(content) {
     const i = content.indexOf(MARKER_BEGIN);
@@ -403,7 +491,18 @@ function backUp(target, content) {
 }
 function ask(question) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return new Promise((resolve) => rl.question(question, (a) => { rl.close(); resolve(a); }));
+    return new Promise((resolve) => {
+        let answered = false;
+        rl.on("close", () => {
+            if (!answered)
+                resolve("");
+        });
+        rl.question(question, (answer) => {
+            answered = true;
+            rl.close();
+            resolve(answer);
+        });
+    });
 }
 function errMsg(err) {
     return err instanceof Error ? err.message : String(err);
@@ -421,16 +520,21 @@ function markerState(content) {
         return "modified";
     return "absent";
 }
-function ensureBlock(target, mode) {
+function fileProblem(target, err, writing) {
+    const code = err?.code;
+    if (writing && (code === "EPERM" || code === "EACCES" || code === "EBUSY")) {
+        return `${target} could not be updated: another program is holding it open, or this account cannot change it`;
+    }
+    return `${target} could not be ${writing ? "updated" : "read"} (${errMsg(err)})`;
+}
+async function ensureBlock(target, mode) {
     let content;
     try {
         content = fs.readFileSync(target, "utf-8");
     }
     catch (err) {
-        if (!isMissing(err)) {
-            console.error(`[ragionex-memory-mcp] Could not read ${target}: ${errMsg(err)}`);
-            return "error";
-        }
+        if (!isMissing(err))
+            return { error: fileProblem(target, err, false) };
         content = null;
     }
     if (content === null) {
@@ -438,11 +542,10 @@ function ensureBlock(target, mode) {
             return "absent-skipped";
         try {
             fs.mkdirSync(path.dirname(target), { recursive: true });
-            replaceFile(target, `${ruleBlock()}\n`);
+            await replaceFile(target, `${ruleBlock()}\n`);
         }
         catch (err) {
-            console.error(`[ragionex-memory-mcp] Could not create ${target}: ${errMsg(err)}`);
-            return "error";
+            return { error: fileProblem(target, err, true) };
         }
         return "created";
     }
@@ -459,34 +562,32 @@ function ensureBlock(target, mode) {
             "\n";
         try {
             backUp(target, content);
-            replaceFile(target, next);
+            await replaceFile(target, next);
         }
         catch (err) {
-            console.error(`[ragionex-memory-mcp] Could not write ${target}: ${errMsg(err)}`);
-            return "error";
+            return { error: fileProblem(target, err, true) };
         }
         return "created";
     }
     const beginIdx = content.indexOf(MARKER_BEGIN);
     const endIdx = content.indexOf(MARKER_END);
-    if (beginIdx < 0 || endIdx < 0 || endIdx < beginIdx)
-        return "error";
+    if (beginIdx < 0 || endIdx < 0 || endIdx < beginIdx) {
+        return { error: `${target} has the Ragionex Memory markers in the wrong order` };
+    }
     const between = content.substring(beginIdx + MARKER_BEGIN.length, endIdx);
     if (between.trim() === RULE_BODY.trim())
         return "uptodate";
     const before = content.slice(0, beginIdx);
     const after = content.slice(endIdx + MARKER_END.length);
-    const refreshed = before + ruleBlock() + after;
     try {
-        replaceFile(target, refreshed);
+        await replaceFile(target, before + ruleBlock() + after);
     }
     catch (err) {
-        console.error(`[ragionex-memory-mcp] Auto-refresh write failed for ${target}: ${errMsg(err)}`);
-        return "error";
+        return { error: fileProblem(target, err, true) };
     }
     return "refreshed";
 }
-function removeBlock(target) {
+async function removeBlock(target) {
     let content;
     try {
         content = fs.readFileSync(target, "utf-8");
@@ -494,8 +595,7 @@ function removeBlock(target) {
     catch (err) {
         if (isMissing(err))
             return "absent";
-        console.error(`[ragionex-memory-mcp] Could not read ${target}: ${errMsg(err)}`);
-        return "error";
+        return { error: fileProblem(target, err, false) };
     }
     const state = markerState(content);
     if (state === "absent")
@@ -505,18 +605,17 @@ function removeBlock(target) {
     const stripped = stripMarkers(content);
     try {
         backUp(target, content);
-        replaceFile(target, stripped);
+        await replaceFile(target, stripped);
     }
     catch (err) {
-        console.error(`[ragionex-memory-mcp] Could not remove block from ${target}: ${errMsg(err)}`);
-        return "error";
+        return { error: fileProblem(target, err, true) };
     }
     return "removed";
 }
 function runCli(cli, args) {
-    const windows = process.platform === "win32";
-    const quoted = windows ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
-    const r = windows
+    const shell = process.platform === "win32" && !path.isAbsolute(cli);
+    const quoted = shell ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
+    const r = shell
         ? spawnSync([cli, ...quoted].join(" "), {
             stdio: ["ignore", "pipe", "pipe"],
             encoding: "utf-8",
@@ -529,19 +628,36 @@ function runCli(cli, args) {
             timeout: 60_000,
             shell: false,
         });
-    if (r.error) {
-        const code = r.error.code;
-        return { ok: false, missing: code === "ENOENT", detail: r.error.message };
+    if (r.error)
+        return { ok: false, detail: r.error.message };
+    return { ok: r.status === 0, detail: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+}
+function runnable(file) {
+    try {
+        if (!fs.statSync(file).isFile())
+            return false;
+        if (process.platform !== "win32")
+            fs.accessSync(file, fs.constants.X_OK);
+        return true;
     }
-    const extensions = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-    const missing = windows && r.status !== 0 && ![process.cwd(), ...(process.env.PATH ?? "").split(path.delimiter)]
+    catch {
+        return false;
+    }
+}
+function agentCli(agent) {
+    const running = agent.runningCli?.();
+    if (running)
+        return { command: running, origin: `Using the ${agent.displayName} that runs this setup: ${running}` };
+    const windows = process.platform === "win32";
+    const extensions = windows ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+    const folders = [...(windows ? [process.cwd()] : []), ...(process.env.PATH ?? "").split(path.delimiter)]
         .map((folder) => folder.replace(/^"(.*)"$/, "$1"))
-        .some((folder) => folder !== "" && extensions.some((extension) => fs.existsSync(path.join(folder, cli + extension))));
-    return {
-        ok: r.status === 0,
-        missing,
-        detail: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim(),
-    };
+        .filter((folder) => folder !== "");
+    if (folders.some((folder) => extensions.some((extension) => runnable(path.join(folder, agent.cli + extension))))) {
+        return { command: agent.cli, origin: null };
+    }
+    const copy = agent.extraClis?.().find(runnable);
+    return copy ? { command: copy, origin: `Using ${agent.displayName} found at ${copy}` } : null;
 }
 function manualHint(agent, args) {
     return (`${agent.displayName}: \`${agent.cli}\` is not on your PATH, so this step could not run.\n` +
@@ -549,7 +665,7 @@ function manualHint(agent, args) {
         `  ${agent.cli} ${args.join(" ")}`);
 }
 function serverEnv(agent, apiKey, apiBase) {
-    const env = apiKey ? [`RAGIONEX_MEMORY_API_KEY=${apiKey}`] : [];
+    const env = [`RAGIONEX_MEMORY_API_KEY=${apiKey}`];
     if (process.env.RAGIONEX_API_BASE !== undefined)
         env.push(`RAGIONEX_API_BASE=${apiBase}`);
     const relocated = agent.homeVariable ? process.env[agent.homeVariable] : undefined;
@@ -557,17 +673,13 @@ function serverEnv(agent, apiKey, apiBase) {
         env.push(`${agent.homeVariable}=${path.resolve(relocated)}`);
     return env;
 }
-function isRegistered(agent, content, manualArgs) {
+function isRegistered(agent, cli, content) {
     if (agent.presenceCheckArgs) {
-        const loaded = runCli(agent.cli, agent.presenceCheckArgs);
-        if (loaded.missing) {
-            console.error(manualHint(agent, manualArgs));
-            return null;
-        }
-        if (!loaded.ok) {
-            console.error(`${agent.displayName}: \`${agent.cli} ${agent.presenceCheckArgs.join(" ")}\` failed: ${cliOutput(loaded.detail)}`);
-            return null;
-        }
+        if (cli === null)
+            return `the \`${agent.cli}\` command was not found`;
+        const loaded = runCli(cli, agent.presenceCheckArgs);
+        if (!loaded.ok)
+            return `\`${agent.cli} ${agent.presenceCheckArgs.join(" ")}\` failed (${cliOutput(loaded.detail)})`;
     }
     if (content === null)
         return false;
@@ -575,86 +687,80 @@ function isRegistered(agent, content, manualArgs) {
         return agent.registrationPresent(content);
     }
     catch (err) {
-        console.error(`${agent.displayName}: could not read the registration in ${agent.configFile}: ${errMsg(err)}`);
-        return null;
+        return `the Ragionex entry in ${agent.configFile} could not be read (${errMsg(err)})`;
     }
 }
-function register(agent, apiKey, apiBase) {
-    const manualArgs = agent.addArgs(serverEnv(agent, "<your-api-key>", apiBase));
+function register(agent, cli, apiKey, apiBase) {
     let original;
     try {
         original = fs.readFileSync(agent.configFile);
     }
     catch (error) {
-        if (!isMissing(error)) {
-            console.error(`${agent.displayName}: cannot safely inspect ${agent.configFile} (${errMsg(error)}). Registration was not changed.`);
-            return "error";
-        }
+        if (!isMissing(error))
+            return `${agent.configFile} could not be read (${errMsg(error)})`;
         original = null;
     }
     let present = false;
-    if (!apiKey || agent.removeBeforeAdd) {
-        const found = isRegistered(agent, original?.toString("utf-8") ?? null, manualArgs);
-        if (found === null)
-            return "error";
+    if (agent.removeBeforeAdd) {
+        const found = isRegistered(agent, cli, original?.toString("utf-8") ?? null);
+        if (typeof found === "string")
+            return found;
         present = found;
     }
-    if (present && !apiKey)
-        return "preserved";
     let recovery = null;
     if (original !== null) {
         try {
             recovery = backUp(agent.configFile, original);
             if (!fs.readFileSync(agent.configFile).equals(original)) {
                 fs.rmSync(recovery, { force: true });
-                console.error(`${agent.displayName}: config changed during setup. Retry installation; no CLI change was made.`);
-                return "error";
+                return `${agent.configFile} changed while the setup was running, so it was left alone`;
             }
         }
         catch (error) {
-            console.error(`${agent.displayName}: could not make a safe recovery copy (${errMsg(error)}). Registration was not changed.`);
-            return "error";
+            return `a safety copy of ${agent.configFile} could not be made (${errMsg(error)}), so it was left alone`;
         }
     }
-    const kept = recovery ? ` The original config is kept at ${recovery}.` : "";
-    if (present && agent.removeBeforeAdd && agent.removeArgs) {
-        const removed = runCli(agent.cli, agent.removeArgs);
-        if (!removed.ok) {
-            console.error(`${agent.displayName}: could not remove the registration for replacement${removed.missing ? "" : `: ${cliOutput(removed.detail)}`}.${kept}`);
-            if (removed.missing)
-                console.error(manualHint(agent, manualArgs));
-            return "error";
+    const settle = (problem) => {
+        if (recovery === null || original === null)
+            return problem;
+        try {
+            if (fs.readFileSync(agent.configFile).equals(original)) {
+                fs.rmSync(recovery, { force: true });
+                return `${problem}. Its settings were not changed`;
+            }
         }
+        catch {
+        }
+        return `${problem}. A copy of its previous settings is at ${recovery}`;
+    };
+    if (present && agent.removeArgs) {
+        const removed = runCli(cli, agent.removeArgs);
+        if (!removed.ok)
+            return settle(`its old Ragionex entry could not be removed (${cliOutput(removed.detail)})`);
     }
-    const added = runCli(agent.cli, agent.addArgs(serverEnv(agent, apiKey, apiBase)));
-    if (!added.ok) {
-        console.error(`${agent.displayName}: registration failed${added.missing ? "" : `: ${cliOutput(added.detail)}`}.${kept}`);
-        if (added.missing)
-            console.error(manualHint(agent, manualArgs));
-        return "error";
-    }
+    const added = runCli(cli, agent.addArgs(serverEnv(agent, apiKey, apiBase)));
+    if (!added.ok)
+        return settle(`the Ragionex entry could not be added (${cliOutput(added.detail)})`);
     let written = null;
     try {
         written = fs.readFileSync(agent.configFile, "utf-8");
     }
     catch (error) {
         if (!isMissing(error))
-            console.error(`${agent.displayName}: cannot read ${agent.configFile} (${errMsg(error)}).`);
+            return settle(`${agent.configFile} could not be read back (${errMsg(error)})`);
     }
-    if (isRegistered(agent, written, manualArgs) !== true ||
-        (apiKey !== null && !(written ?? "").includes(apiKey))) {
-        console.error(`${agent.displayName}: the requested registration could not be confirmed in ${agent.configFile}.${kept}`);
-        return "error";
+    if (isRegistered(agent, cli, written) !== true || !(written ?? "").includes(apiKey)) {
+        return settle(`the Ragionex entry was not found in ${agent.configFile} afterwards`);
     }
     if (recovery) {
         try {
             fs.unlinkSync(recovery);
         }
         catch (error) {
-            console.error(`${agent.displayName}: delete the recovery copy ${recovery} by hand (${errMsg(error)}).`);
+            console.log(`Note: delete ${recovery} by hand; it is a copy of the ${agent.displayName} settings from before the setup (${errMsg(error)}).`);
         }
     }
-    return "registered";
+    return null;
 }
 function spliceServerEntry(content, containerKey, serverKey) {
     const errors = [];
@@ -693,13 +799,14 @@ function spliceServerEntry(content, containerKey, serverKey) {
     }
     return applyEdits(content, edits);
 }
-function unregister(agent) {
+async function unregister(agent) {
+    const cli = agentCli(agent)?.command ?? null;
     if (agent.removeArgs) {
-        const removed = runCli(agent.cli, agent.removeArgs);
-        if (removed.missing) {
+        if (cli === null) {
             console.error(manualHint(agent, agent.removeArgs));
             return false;
         }
+        const removed = runCli(cli, agent.removeArgs);
         let content = null;
         try {
             content = fs.readFileSync(agent.configFile, "utf-8");
@@ -710,9 +817,11 @@ function unregister(agent) {
                 return false;
             }
         }
-        const present = isRegistered(agent, content, agent.removeArgs);
-        if (present === null)
+        const present = isRegistered(agent, cli, content);
+        if (typeof present === "string") {
+            console.error(`${agent.displayName}: ${present}.`);
             return false;
+        }
         if (present) {
             console.error(`${agent.displayName}: could not remove "${SERVER_NAME}" from ${agent.configFile}; the registration is still present${removed.ok ? "" : ` (${cliOutput(removed.detail)})`}.`);
             return false;
@@ -733,9 +842,9 @@ function unregister(agent) {
         console.error(`${agent.displayName}: could not read ${agent.configFile}: ${errMsg(err)}`);
         return false;
     }
-    const present = isRegistered(agent, content, []);
-    if (present === null) {
-        console.error(`${agent.displayName}: please remove the "${SERVER_NAME}" entry from ${agent.configFile} by hand.`);
+    const present = isRegistered(agent, cli, content);
+    if (typeof present === "string") {
+        console.error(`${agent.displayName}: ${present}. Please remove the "${SERVER_NAME}" entry from ${agent.configFile} by hand.`);
         return false;
     }
     if (!present)
@@ -744,14 +853,14 @@ function unregister(agent) {
     let recovery;
     try {
         recovery = backUp(agent.configFile, content);
-        replaceFile(agent.configFile, next);
+        await replaceFile(agent.configFile, next);
     }
     catch (err) {
         console.error(`${agent.displayName}: could not update ${agent.configFile}: ${errMsg(err)}`);
         return false;
     }
-    const loaded = runCli(agent.cli, agent.spliceCheckArgs);
-    if (loaded.ok) {
+    const loaded = cli === null ? null : runCli(cli, agent.spliceCheckArgs);
+    if (loaded?.ok) {
         try {
             if (!agent.registrationPresent(fs.readFileSync(agent.configFile, "utf-8")))
                 return true;
@@ -761,17 +870,17 @@ function unregister(agent) {
         }
     }
     try {
-        replaceFile(agent.configFile, content);
+        await replaceFile(agent.configFile, content);
     }
     catch (err) {
         console.error(`${agent.displayName}: the edited config could not be validated or restored (${errMsg(err)}). The original is at ${recovery}.`);
         return false;
     }
-    if (loaded.ok) {
+    if (loaded?.ok) {
         console.error(`${agent.displayName}: please remove the "${SERVER_NAME}" entry from ${agent.configFile} by hand.`);
         return false;
     }
-    console.error(loaded.missing
+    console.error(loaded === null
         ? `${agent.displayName}: \`${agent.cli}\` is not on your PATH, so the edited config could not be validated and was restored. Re-run uninstall where \`${agent.cli}\` works, or remove the "${SERVER_NAME}" entry from ${agent.configFile} by hand.`
         : `${agent.displayName}: the edited config did not load (${cliOutput(loaded.detail)}), so it was restored. Remove the "${SERVER_NAME}" entry from ${agent.configFile} by hand.`);
     return false;
@@ -785,19 +894,22 @@ export function responseBudgetForClient(client) {
 export function folderSourceForClient(client) {
     return agentRegistry().find((agent) => agent.enabled && agent.clientId === client?.name)?.folderSource ?? "unavailable";
 }
-export function refreshForClient(client) {
+export async function refreshForClient(client) {
     try {
         const agent = agentRegistry().find((a) => a.enabled && a.clientId === client?.name);
         if (!agent) {
             console.error(`[ragionex-memory-mcp] Unrecognized MCP client: name=${client?.name ?? "(none reported)"} version=${client?.version ?? "(none reported)"}. Rule refresh skipped.`);
             return;
         }
-        const result = ensureBlock(agent.rulesFile, "update");
-        if (result === "refreshed") {
+        const result = await ensureBlock(agent.rulesFile, "update");
+        if (typeof result === "object") {
+            console.error(`[ragionex-memory-mcp] ${agent.displayName}: priority rule refresh failed: ${result.error}.`);
+        }
+        else if (result === "refreshed") {
             console.error(`[ragionex-memory-mcp] Priority rule refreshed for ${agent.displayName} (${agent.rulesFile}).`);
         }
         else if (result === "absent-skipped") {
-            console.error(`[ragionex-memory-mcp] No priority rule found for ${agent.displayName}. Install it with: npx -y @ragionex/memory-mcp@latest install --agent ${agent.key}`);
+            console.error(`[ragionex-memory-mcp] No priority rule found for ${agent.displayName}. Install it with: ${SETUP_COMMAND} install --agent ${agent.key}`);
         }
         else if (result === "modified-markers") {
             console.error(`[ragionex-memory-mcp] ${agent.displayName}: priority-rule markers were modified in ${agent.rulesFile}; refresh skipped (opt-out respected).`);
@@ -807,49 +919,244 @@ export function refreshForClient(client) {
         console.error(`[ragionex-memory-mcp] Rule refresh failed: ${errMsg(err)}`);
     }
 }
-export async function runInstall(argv) {
-    const args = parseArgs(argv);
+export function rulesFileForClient(client) {
+    return agentRegistry().find((agent) => agent.enabled && agent.clientId === client?.name)?.rulesFile;
+}
+async function callService(apiBase, route, body, apiKey) {
+    const response = await fetch(`${apiBase}${route}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+            Accept: "application/json",
+            "User-Agent": USER_AGENT,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+            ...(apiKey === undefined ? {} : { "X-API-Key": apiKey }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        redirect: "error",
+    });
+    const parsed = await response.json().catch(() => undefined);
+    return {
+        status: response.status,
+        body: parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {},
+    };
+}
+function networkReason(err) {
+    return err instanceof Error && err.cause instanceof Error ? err.cause.message : errMsg(err);
+}
+function keyName(agent) {
+    const today = new Date();
+    const day = [today.getFullYear(), today.getMonth() + 1, today.getDate()]
+        .map((part) => String(part).padStart(2, "0"))
+        .join("-");
+    return `${agent.displayName} (set up ${day})`;
+}
+async function keyWorks(apiBase, apiKey) {
+    let reply;
+    try {
+        reply = await callService(apiBase, "/v1/memory/identity", undefined, apiKey);
+    }
+    catch (err) {
+        return `Ragionex could not be reached to confirm the new key (${networkReason(err)})`;
+    }
+    return reply.status === 200 && identitySchema.safeParse(reply.body).success
+        ? null
+        : `Ragionex did not accept the new key (HTTP ${reply.status})`;
+}
+function ruleCurrent(target) {
+    const content = readOrEmpty(target);
+    const begin = content.indexOf(MARKER_BEGIN);
+    const end = content.indexOf(MARKER_END);
+    return markerState(content) === "strict" && begin < end &&
+        content.substring(begin + MARKER_BEGIN.length, end).trim() === RULE_BODY.trim();
+}
+function issuedKeys(reply, count) {
+    const entries = Array.isArray(reply.body.keys) ? reply.body.keys : [];
+    const keys = entries.map((entry) => {
+        const fields = (entry !== null && typeof entry === "object" ? entry : {});
+        return typeof fields.key === "string" && API_KEY_FORMAT.test(fields.key) &&
+            typeof fields.key_id === "number" && Number.isSafeInteger(fields.key_id) && fields.key_id > 0
+            ? { key: fields.key, number: fields.key_id }
+            : null;
+    });
+    return keys.length === count && keys.every((key) => key !== null) ? keys : null;
+}
+function joinNames(names) {
+    return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+function notReady(problem, next, command, agent) {
+    console.log(`Ragionex Memory is not ready${agent ? ` for ${agent.displayName}` : ""}: ${problem}.`);
+    console.log(`Next step: ${next}${command ? ":" : "."}`);
+    if (command)
+        console.log(`  ${command}`);
+    return 1;
+}
+function unreachable(err, retry) {
+    return notReady(`Ragionex could not be reached (${networkReason(err)})`, "check the internet connection (AI agents: this command needs network access, so ask the user to allow it outside any sandbox), then run", retry);
+}
+function refused(reply, retry) {
+    if (reply.status === 429) {
+        const seconds = reply.body.retry_after_seconds;
+        const minutes = typeof seconds === "number" && seconds > 0 ? Math.ceil(seconds / 60) : 0;
+        const wait = minutes ? `${minutes} minute${minutes === 1 ? "" : "s"}` : "a few minutes";
+        return notReady("too many setup requests came for this address or from this network", `wait ${wait}, then run`, retry);
+    }
+    const message = typeof reply.body.error === "string" ? reply.body.error : `HTTP ${reply.status}`;
+    return notReady(`Ragionex refused the request (${message})`, "run it again, and if this keeps happening, write to contact@ragionex.com", retry);
+}
+async function connectAgent(agent, cli, issued, keyLabel, apiBase, notes) {
+    const problem = register(agent, cli, issued.key, apiBase);
+    if (problem !== null) {
+        return {
+            problem: `${problem}. The new key "${keyLabel}" (#${issued.number}) is not needed; you can revoke it at ${KEYS_PAGE}`,
+            next: "fix the problem above, then run the setup again",
+        };
+    }
+    const block = await ensureBlock(agent.rulesFile, "install");
+    if (typeof block === "object") {
+        return {
+            problem: block.error,
+            next: `close any program that may have ${agent.rulesFile} open, such as an editor or a sync or backup tool, then run the setup again (AI agents: if a sandbox blocked the write, ask the user to allow it)`,
+        };
+    }
+    if (block === "modified-markers") {
+        notes.push(`the Ragionex Memory rule in ${agent.rulesFile} was frozen by editing its begin marker, so it was left as it is`);
+    }
+    else if (!ruleCurrent(agent.rulesFile)) {
+        return { problem: `the Ragionex Memory rule is missing from ${agent.rulesFile} after writing it`, next: "run the setup again" };
+    }
+    const rejected = await keyWorks(apiBase, issued.key);
+    return rejected === null ? null : { problem: rejected, next: "check the internet connection, then run the setup again" };
+}
+async function runInstall(argv) {
+    const args = parseArgs(argv, "install");
     const apiBase = normalizeApiBase(process.env.RAGIONEX_API_BASE ?? DEFAULT_API_BASE);
     const targets = await resolveTargets(args, "install");
-    const apiKey = await resolveApiKey(args);
-    if (apiKey !== null) {
-        if (!API_KEY_FORMAT.test(apiKey)) {
-            console.error("That API key is malformed: keys start with rgx_memory_ followed by letters, digits, - or _. Nothing was changed.");
-            process.exit(2);
-        }
-        if (!(await keyAccepted(apiKey, apiBase)))
-            process.exit(1);
-    }
-    let failed = 0;
+    const interactive = Boolean(process.stdin.isTTY);
+    const selector = args.allAgents ? "--all-agents" : `--agent ${targets[0].key}`;
+    const rerun = (flags) => `${SETUP_COMMAND} install ${selector}${flags}`;
+    const clis = [];
     for (const agent of targets) {
-        const registration = register(agent, apiKey, apiBase);
-        if (registration === "error") {
-            failed++;
-            continue;
+        const found = agentCli(agent);
+        if (found === null && agent.runningCli) {
+            return notReady(`the \`${agent.cli}\` command was not found, so ${agent.displayName} cannot be connected from here`, `paste this line into ${agent.displayName}, in a terminal or in the Claude desktop app, so the setup runs from ${agent.displayName} itself`, AGENT_SETUP);
         }
-        const block = ensureBlock(agent.rulesFile, "install");
-        if (block === "error") {
-            failed++;
-            continue;
+        if (found === null) {
+            return notReady(`the \`${agent.cli}\` command was not found, so ${agent.displayName} cannot be connected from here`, `run the setup from ${agent.displayName} itself, or from a terminal where the \`${agent.cli}\` command works`, rerun(""));
         }
-        if (block === "modified-markers") {
-            console.log(`${agent.displayName}: priority-rule markers were edited, so the existing block was left untouched (opt-out respected).`);
-        }
-        else if (markerState(readOrEmpty(agent.rulesFile)) !== "strict") {
-            console.error(`${agent.displayName}: the priority rule is missing from ${agent.rulesFile} after writing it.`);
-            failed++;
-            continue;
-        }
-        console.log(`${registration === "preserved" ? "Kept the existing registration and installed rules" : "Installed"} for ${agent.displayName}. Restart ${agent.displayName} (quit and reopen) to activate it.`);
-        if (registration === "preserved") {
-            console.log("The existing credential was not changed or validated.");
-        }
-        else if (!apiKey) {
-            console.log(keyFollowUp(agent));
-        }
+        if (found.origin)
+            console.log(`${found.origin}.`);
+        clis.push(found.command);
     }
-    if (failed > 0)
-        process.exit(1);
+    let email = args.email?.trim().toLowerCase() ?? "";
+    if (!email) {
+        if (!interactive) {
+            console.log("Ragionex Memory setup needs the email address of your Ragionex account. A one-time code is sent there, and a new free account is created if the address has none.");
+            console.log(TERMS_LINE);
+            console.log("Next step: run this again with that email address (AI agents: show the user the two lines above, then ask for the address):");
+            console.log(`  ${rerun(" --email <address>")}`);
+            return 0;
+        }
+        console.log(TERMS_LINE);
+        email = (await ask("Your email address: ")).trim().toLowerCase();
+    }
+    if (email.length > 256 || !EMAIL_FORMAT.test(email)) {
+        console.error(`"${email}" is not an email address.`);
+        return 2;
+    }
+    const shownEmail = /^[A-Za-z0-9@._+-]+$/.test(email) ? email : "<address>";
+    let code = args.code;
+    if (code === undefined) {
+        if (args.email?.trim())
+            console.log(TERMS_LINE);
+        let sent;
+        try {
+            sent = await callService(apiBase, "/v1/setup/code", { email });
+        }
+        catch (err) {
+            return unreachable(err, rerun(` --email ${shownEmail}`));
+        }
+        if (sent.status !== 200)
+            return refused(sent, rerun(` --email ${shownEmail}`));
+        const minutes = typeof sent.body.expires_in_seconds === "number" ? Math.round(sent.body.expires_in_seconds / 60) : 10;
+        console.log(`A one-time code was sent to ${email}. It works once and expires in ${minutes} minutes.`);
+        if (!interactive) {
+            console.log("Next step: run this again with the code from that email (AI agents: tell the user about the Terms line above, then ask for the code):");
+            console.log(`  ${rerun(` --email ${shownEmail} --code <code>`)}`);
+            return 0;
+        }
+        code = await ask("Code from the email: ");
+    }
+    const keyNames = targets.map(keyName);
+    let keys = [];
+    for (;;) {
+        const entered = code.toUpperCase().replace(/[\s-]/g, "");
+        if (interactive && !entered) {
+            console.log("Setup was cancelled.");
+            return 1;
+        }
+        let reply = null;
+        if (CODE_FORMAT.test(entered)) {
+            try {
+                reply = await callService(apiBase, "/v1/setup/verify", {
+                    email,
+                    code: entered,
+                    keys: keyNames.map((name) => ({ name })),
+                });
+            }
+            catch (err) {
+                return unreachable(err, rerun(` --email ${shownEmail} --code ${entered}`));
+            }
+        }
+        if (reply === null || reply.body.code === "invalid_code") {
+            if (interactive) {
+                code = await ask("That code is not right. Check the email and type it again: ");
+                continue;
+            }
+            return notReady("the code is not correct", "check the code in the email and run", rerun(` --email ${shownEmail} --code <code>`));
+        }
+        if (reply.status === 200) {
+            const issued = issuedKeys(reply, targets.length);
+            if (issued === null)
+                return notReady("Ragionex sent an answer this setup cannot use", "run the setup again", rerun(` --email ${shownEmail}`));
+            keys = issued;
+            break;
+        }
+        if (reply.body.code === "code_expired") {
+            return notReady("this code has expired, was used up or was replaced by a newer one", "get a new code with", rerun(` --email ${shownEmail}`));
+        }
+        if (reply.body.code === "key_limit_reached") {
+            return notReady("your account already has as many active API keys as it can have", `revoke keys you no longer use at ${KEYS_PAGE}, then run this before the code expires`, rerun(` --email ${shownEmail} --code ${entered}`));
+        }
+        if (reply.body.code === "account_unavailable") {
+            return notReady(`the Ragionex account for ${email} cannot be used`, "write to contact@ragionex.com for help");
+        }
+        return refused(reply, rerun(` --email ${shownEmail} --code ${entered}`));
+    }
+    const connected = [];
+    const notes = [];
+    let failure = null;
+    for (const [index, agent] of targets.entries()) {
+        const outcome = await connectAgent(agent, clis[index], keys[index], keyNames[index], apiBase, notes);
+        if (outcome === null)
+            connected.push(agent.displayName);
+        else if (failure === null)
+            failure = { agent, ...outcome };
+        else
+            notes.push(`${agent.displayName} is not ready either: ${outcome.problem}`);
+    }
+    for (const note of notes)
+        console.log(`Note: ${note}.`);
+    const names = joinNames(connected);
+    const are = connected.length === 1 ? "is" : "are";
+    if (failure) {
+        if (connected.length)
+            console.log(`${names} ${are} connected; restart ${connected.length === 1 ? "it" : "them"} to load Ragionex Memory.`);
+        return notReady(failure.problem, failure.next, rerun(` --email ${shownEmail}`), failure.agent);
+    }
+    console.log(`Ragionex Memory is ready: ${names} ${are} connected to ${email}.`);
+    console.log(`Next step: restart ${names} (quit completely and open again) so Ragionex Memory loads, then ask: "Check my Ragionex Memory connection." (AI agents: tell the user this step; you cannot restart yourself.)`);
+    return 0;
 }
 function readOrEmpty(target) {
     try {
@@ -859,22 +1166,24 @@ function readOrEmpty(target) {
         return "";
     }
 }
-export async function runUninstall(argv) {
-    const args = parseArgs(argv);
+async function runUninstall(argv) {
+    const args = parseArgs(argv, "uninstall");
     const targets = await resolveTargets(args, "uninstall");
     let failed = 0;
     for (const agent of targets) {
-        const unregistered = unregister(agent);
+        const unregistered = await unregister(agent);
         if (!unregistered)
             failed++;
-        const removed = removeBlock(agent.rulesFile);
-        if (removed === "error")
+        const removed = await removeBlock(agent.rulesFile);
+        if (typeof removed === "object") {
+            console.error(`${agent.displayName}: ${removed.error}.`);
             failed++;
-        if (removed === "modified-markers") {
+        }
+        else if (removed === "modified-markers") {
             console.log(`${agent.displayName}: priority-rule markers were edited, so the block was left in place.`);
         }
         if (unregistered && (removed === "removed" || removed === "absent")) {
-            console.log(`Removed from ${agent.displayName}. Restart ${agent.displayName} to drop the server.`);
+            console.log(`Removed from ${agent.displayName}. Restart ${agent.displayName} to drop the server. Its key stays in your account; revoke it at ${KEYS_PAGE} if you do not plan to reconnect.`);
         }
     }
     try {
@@ -887,6 +1196,29 @@ export async function runUninstall(argv) {
         console.error(`Local saves in ${SPOOL_DIR} could not be counted: ${errMsg(err)}`);
     }
     console.log("Backups of every file that was edited are kept next to it as *.ragionex-backup-*; delete them when you no longer need them.");
-    if (failed > 0)
-        process.exit(1);
+    return failed > 0 ? 1 : 0;
+}
+export async function runCommand(command, argv) {
+    try {
+        if (command === "install")
+            return await runInstall(argv);
+        if (command === "uninstall")
+            return await runUninstall(argv);
+        if (command === "--help" || command === "-h") {
+            console.log(usage());
+            return 0;
+        }
+        console.error(`Unknown command: ${command}`);
+        console.error(usage());
+        return 2;
+    }
+    catch (error) {
+        if (error instanceof Stop)
+            return error.status;
+        if (error instanceof ApiError && error.code === "invalid_api_base") {
+            console.error(error.message);
+            return 2;
+        }
+        throw error;
+    }
 }

@@ -9,11 +9,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-export const ENTRY = fileURLToPath(new URL("../build/index.js", import.meta.url));
+const ENTRY = fileURLToPath(new URL("../build/index.js", import.meta.url));
 export const PACKAGE = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
-const AGENT_CLI_STUB = fileURLToPath(new URL("./agent-cli-stub.js", import.meta.url));
+export const AGENT_CLI_STUB = fileURLToPath(new URL("./agent-cli-stub.js", import.meta.url));
 
 export const apiKey = (letter) => `rgx_memory_${letter.repeat(48)}`;
+// The one-time code the mock accepts, and the install flags that send it.
+const SETUP_CODE = "K7QFM2XR";
+export const SETUP = ["--email", "user@example.com", "--code", "K7QF-M2XR"];
 export const text = (result) => result.content?.[0]?.text ?? "";
 export const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const ACCOUNT_A = "a".repeat(32);
@@ -92,13 +95,14 @@ export async function startMock(t) {
     },
     identities: new Map(),
     replies: { identity: [], write: [], update: [], search: [], list: [], view: [], delete: [], status: [],
-      trash: [], versions: [], version: [], restore: [] },
+      trash: [], versions: [], version: [], restore: [], setupCode: [], setupVerify: [] },
     receipts: new Map(),
     charges: 0,
     records: new Map(),
     trash: new Map(),
     deleted: new Set(),
     requests: [],
+    issued: [],
     nextId: 1,
     onWrite: null,
     onSearch: null,
@@ -128,6 +132,23 @@ export async function startMock(t) {
       else if (/^\/v1\/memory\/versions\/[^/]+$/.test(pathname) && req.method === "GET") route = "versions";
       else if (pathname === "/v1/memory/restore" && req.method === "POST") route = "restore";
       else if (/^\/v1\/memory\/status\/[^/]+$/.test(pathname) && req.method === "GET") route = "status";
+      else if (pathname === "/v1/setup/code" && req.method === "POST") route = "setupCode";
+      else if (pathname === "/v1/setup/verify" && req.method === "POST") route = "setupVerify";
+      if (route.startsWith("setup")) {
+        const scripted = state.replies[route].shift();
+        if (scripted) return send(scripted.status, scripted.body ?? { success: false, error: "Scripted failure" }, scripted.headers);
+        if (route === "setupCode") return send(200, { success: true, expires_in_seconds: 600 });
+        if (body.code !== SETUP_CODE) return send(400, { success: false, error: "The code is not correct.", code: "invalid_code" });
+        return send(200, {
+          success: true,
+          email: body.email,
+          keys: body.keys.map(({ name }) => {
+            const key = apiKey(String.fromCharCode(102 + state.issued.length));
+            state.issued.push(key);
+            return { key_id: state.issued.length, label: name, key };
+          }),
+        });
+      }
       const keyIdentity = state.identities.get(req.headers["x-api-key"]);
       if (keyIdentity === null) return send(401, { success: false, error: "Invalid API key", code: "unauthorized" });
       const sourceIdentity = keyIdentity ?? state.identity;
@@ -244,10 +265,10 @@ export async function startMock(t) {
 }
 
 /** Starts the built server over stdio, like an agent does. */
-export async function connect(t, { home, base, key, env = {}, name = "test-client", cwd = home, roots, nodeArgs = [], onStderr, entry = ENTRY }) {
+export async function connect(t, { home, base, key, env = {}, name = "test-client", cwd = home, roots, nodeArgs = [], onStderr }) {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [...nodeArgs, entry],
+    args: [...nodeArgs, ENTRY],
     cwd,
     env: {
       HOME: home,
@@ -296,9 +317,9 @@ export function machine(t, { clis = ["claude", "codex", "opencode"], folders = [
     root,
     home,
     // Asynchronous, so a mock API served by this test process can answer the installer.
-    run: (args, env = {}, cwd = root) => new Promise((resolve) => {
+    run: (args, env = {}) => new Promise((resolve) => {
       const child = execFile(process.execPath, [ENTRY, ...args], {
-        cwd,
+        cwd: root,
         // A local default API address keeps every installer run away from the real service.
         // cmd.exe is found through ComSpec, which every real Windows session sets.
         env: {

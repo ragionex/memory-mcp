@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PACKAGE, apiKey, connect, machine, pendingFiles, startMock, tempDir, text, waitFor } from "./helpers.js";
+import { PACKAGE, SETUP, apiKey, connect, machine, pendingFiles, startMock, tempDir, text, waitFor } from "./helpers.js";
 
 const LABEL = `ragionex-memory-mcp/${PACKAGE.version}`;
 const sent = (requests) => requests.map((request) => [request.method, request.url.split("?")[0], request.headers["user-agent"]]);
@@ -14,6 +14,7 @@ test("tool requests send the client label", async (t) => {
   await client.callTool({ name: "ragionex_list_memories", arguments: {} });
   assert.deepEqual(sent(mock.state.requests), [
     ["GET", "/v1/memory/identity", LABEL],
+    ["GET", "/v1/memory/list", LABEL],
     ["POST", "/v1/memory/write", LABEL],
     ["POST", "/v1/memory/search", LABEL],
     ["GET", "/v1/memory/list", LABEL],
@@ -35,10 +36,10 @@ test("a queued save replayed by a later connector sends the client label", async
   assert.deepEqual(mock.writes().map((write) => write.headers["user-agent"]), [LABEL, LABEL]);
 });
 
-test("the installer's key check sends the client label", async (t) => {
+test("the installer's setup requests send the client label", async (t) => {
   const mock = await startMock(t);
   const box = machine(t);
-  const result = await box.run(["install", "--agent", "claude-code", "--api-key", apiKey("a")], { RAGIONEX_API_BASE: mock.base });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(sent(mock.state.requests), [["GET", "/v1/memory/identity", LABEL]]);
+  const result = await box.run(["install", "--agent", "claude-code", ...SETUP], { RAGIONEX_API_BASE: mock.base });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(sent(mock.state.requests), [["POST", "/v1/setup/verify", LABEL], ["GET", "/v1/memory/identity", LABEL]]);
 });

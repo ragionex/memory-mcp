@@ -47,7 +47,6 @@ function codex() {
   const file = path.join(dir, "config.toml");
   const current = fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : "";
   if (command === "list") {
-    if (current.includes("MALFORMED")) fail("Error: failed to load configuration");
     return;
   }
   let next = current.split(/\n(?=\[)/).filter((table) => !table.startsWith(`[mcp_servers.${name}`)).join("\n");

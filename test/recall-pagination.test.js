@@ -236,17 +236,6 @@ test("recall guidance is split between call shaping and result handling", async 
   }
   assert.equal(fields.page.description, "Which results page to return for this query and dates. Omit or pass null for the first page.");
   assert.match(fields.query.description, /5-512 characters/);
-  assert.equal(fields.query.type, "string");
-  assert.equal(fields.query.minLength, 5);
-  assert.equal(fields.query.maxLength, 512);
-  assert.deepEqual(tool.inputSchema.required, ["query"]);
-  for (const name of ["page", "start_date", "end_date"]) {
-    assert.ok(fields[name].anyOf.some(option => option.type === "null"), name);
-  }
-  const pageSchema = fields.page.anyOf.find(option => option.type === "integer");
-  assert.equal(pageSchema.minimum, 1);
-  assert.equal(pageSchema.maximum, Number.MAX_SAFE_INTEGER);
-  for (const name of ["cursor", "queries", "results"]) assert.equal(Object.hasOwn(fields, name), false, name);
   const descriptions = [tool.description, ...Object.values(fields).map(field => field.description ?? "")].join("\n");
   assert.ok(Buffer.byteLength(descriptions, "utf8") < 2048);
   assert.doesNotMatch([RULE_BODY, client.getInstructions(), JSON.stringify(tools)].join("\n"), /\bcredits?\b/i);

@@ -51,29 +51,18 @@ import { findRecallSearch, getRecallRemainder, storeRecallPage } from "./recall-
 
 // --- Commands (run-and-exit before booting the MCP server) -------------------
 // Without an argument this process is the MCP server, which is how agents
-// launch it. `install` registers it with one agent and writes the priority rule
-// into that agent's global rules file; `uninstall` reverses both. None of them
-// starts the MCP server, so RAGIONEX_MEMORY_API_KEY is not required to reach
-// them - this router must stay ahead of every other boot step.
+// launch it. `install` connects a coding agent and writes the priority rule into
+// its global rules file; `uninstall` reverses both. With a command the server never
+// connects, so RAGIONEX_MEMORY_API_KEY is not required to reach them - this router
+// must stay ahead of every other boot step. Commands set process.exitCode and never
+// call process.exit: on Windows, exiting while network handles are still closing
+// aborts Node with a libuv assertion.
 const command = process.argv[2];
 if (command === "--version" || command === "-v") {
   console.log(VERSION);
-  process.exit(0);
-}
-if (command !== undefined) {
+} else if (command !== undefined) {
   const cli = await import("./init.js");
-  if (command === "install") {
-    await cli.runInstall(process.argv.slice(3));
-  } else if (command === "uninstall") {
-    await cli.runUninstall(process.argv.slice(3));
-  } else if (command === "--help" || command === "-h") {
-    console.log(cli.usage());
-  } else {
-    console.error(`Unknown command: ${command}`);
-    console.error(cli.usage());
-    process.exit(2);
-  }
-  process.exit(0);
+  process.exitCode = await cli.runCommand(command, process.argv.slice(3));
 }
 
 const API_BASE = process.env.RAGIONEX_API_BASE ?? DEFAULT_API_BASE;
@@ -94,6 +83,20 @@ const RECORD_TEXT_BUDGET_BYTES = 60_000;
 // those at the issue tracker buries real bug reports under config mistakes.
 // The handshake fills in the agent's install name, so setup commands are ready to run.
 let installAgent = "<your-agent>";
+
+// What the user runs to get a working key: the setup for the agents it supports, a
+// dashboard key for any other client.
+function keySetupStep(): string {
+  return installAgent === "<your-agent>"
+    ? "Create a key at https://app.ragionex.com/keys and add it to this client's MCP configuration as RAGIONEX_MEMORY_API_KEY."
+    : `Run the setup: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent}`;
+}
+
+// Offered on a connection check while the selected Vault is empty: the moment right
+// after setup to bring in what the agent already knows.
+function importOffer(rulesFile: string | undefined): string {
+  return `This Vault has no memories yet. Offer the user, in one sentence, to import what you already know about them and their projects. Only if they agree: read ${rulesFile ?? "the user's global agent rules file"}, the rules file of this project and your own local memory files for this project. Save each lasting preference, decision and project fact from them as its own memory, with the recall before every save, and skip the Ragionex Memory block, anything temporary and anything already saved. Leave those files unchanged. Then call ragionex_list_memories to confirm what was saved, and tell the user in a few lines what was saved and what was skipped.`;
+}
 
 // Path-specific guidance reaches the agent exactly when a decision depends on it.
 // Opens the sentence an error ends with: what the agent must tell the user.
@@ -163,7 +166,7 @@ async function requestContext(): Promise<RequestContext> {
   const selection = readConfig(workingFolder, process.env.RAGIONEX_MEMORY_API_KEY || undefined);
   if (selection.key === undefined) {
     throw new ApiError(
-      `RAGIONEX_MEMORY_API_KEY is not set. Get a key at https://app.ragionex.com/keys and run: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent} --api-key rgx_memory_...`,
+      `RAGIONEX_MEMORY_API_KEY is not set. ${keySetupStep()} Then restart your agent.`,
       401,
       "missing_api_key",
     );
@@ -237,7 +240,7 @@ async function api<T>(opts: RequestOpts, context: CredentialContext & { vaultId?
     }
     let guidance: string;
     if (res.status === 401) {
-      guidance = `The API key is invalid or revoked. Get a key at https://app.ragionex.com/keys and run: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent} --api-key rgx_memory_... Then restart your agent. Show the user this link and command exactly as written.`;
+      guidance = `The API key is invalid or revoked. ${keySetupStep()} Then restart your agent. Show the user this step exactly as written.`;
     } else if (res.status === 403) {
       guidance = `Do not try another Vault or key.${TELL_USER} this key, or their access to the selected Vault, does not allow this action, so it was not carried out; to fix it, they can ask the Vault's owner for this permission or use a key that has it.`;
     } else if (res.status === 404 && code === "vault_not_found") {
@@ -448,6 +451,16 @@ server.registerTool(
     const targetAvailable = identity === null
       ? null
       : identity.vaults.some(vault => vault.vault_id === target);
+    // The offer is optional, so a failed check only leaves it out.
+    let empty = false;
+    if (identity?.vaults.find(vault => vault.vault_id === target)?.permissions.includes("read")) {
+      try {
+        const page = await api<{ memories: unknown }>({ method: "GET", path: "/v1/memory/list?limit=1", wakeQueue: false }, context);
+        empty = Array.isArray(page.memories) && page.memories.length === 0;
+      } catch {
+        // Without the check, no offer is made.
+      }
+    }
     const data = {
       identity,
       target_vault_id: target,
@@ -460,9 +473,14 @@ server.registerTool(
         ? "Pending-save sync started in the background. This does not confirm that pending saves are saved."
         : "No new sync started. Check pending saves, retry time, and storage errors in the queue status.",
     };
+    const content = [{ type: "text" as const, text: JSON.stringify(data, null, 2) }];
+    if (empty) {
+      const { rulesFileForClient } = await import("./init.js");
+      content.push({ type: "text" as const, text: agentReminder([importOffer(rulesFileForClient(server.server.getClientVersion()))]) });
+    }
     return {
       ...((error || targetAvailable === false) ? { isError: true } : {}),
-      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      content,
     };
   },
 );
@@ -1066,7 +1084,7 @@ async function main() {
         const { refreshForClient, agentKeyForClient } = await import("./init.js");
         const client = server.server.getClientVersion();
         installAgent = agentKeyForClient(client) ?? installAgent;
-        refreshForClient(client);
+        void refreshForClient(client);
       } catch (error) {
         console.error(
           `[ragionex-memory-mcp] Rule refresh failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1081,7 +1099,9 @@ async function main() {
   console.error("[ragionex-memory-mcp] Connected via stdio.");
 }
 
-main().catch((err) => {
-  console.error("[ragionex-memory-mcp] Fatal:", err);
-  process.exit(1);
-});
+if (command === undefined) {
+  main().catch((err) => {
+    console.error("[ragionex-memory-mcp] Fatal:", err);
+    process.exit(1);
+  });
+}
