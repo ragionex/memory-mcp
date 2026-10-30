@@ -22,17 +22,19 @@ Keep each project in its own Vault, give every key only the access it needs, and
 
 ## What You Get
 
-**Automatic Memory.** Your agent automatically saves the decisions, preferences and project facts that come up while you work, and checks its memory before it answers, starts a task or asks you anything about your work. You can still tell it to remember or forget anything, any time.
+**A Context Engine That Understands the Question.** Your agent asks in plain language, and the engine understands what it means, even when it asks in different words than the memory was saved in. Even among thousands of memories, the right ones come first and arrive in milliseconds, so the agent reads only as much as it needs and its context stays lean. Memories come back exactly as they were saved: Ragionex never rewrites a memory or generates an answer.
 
-**Always Up to Date.** A changed decision updates its record instead of adding a second one, and a record that turns out wrong is removed. Every change ends with one short line in the reply, so "undo that" is one sentence away.
+**Automatic Memory.** Your agent saves what's worth keeping on its own: a document, a design decision, a preference, a project fact, something that was tried and how it turned out. It checks its memory before it answers, starts a task or asks you anything about your work, and the memory gets richer and more accurate the more you work. You can still tell it to remember or forget anything, any time.
+
+**Always Up to Date.** A changed decision updates its record instead of adding a second one, and a record that turns out wrong is removed. Every change ends with one short line in the reply, so "undo that" is one sentence away. Every update carries the version its agent last read, so no agent can silently overwrite another's newer change.
 
 **Version History.** Earlier versions of every memory, and deleted records in the trash, are kept for 30 days. Bring any of them back just by asking your agent, or from the dashboard.
 
-**Fast, Exact Recall.** Recall returns in milliseconds, and memories come back exactly as they were saved: Ragionex never rewrites a memory or generates an answer.
+**Everything Visible in the Dashboard.** Browse every memory your agents saved and see each one's status, who created or last edited it, and through which key. Open earlier versions, edit, restore or delete anything yourself, and export it all whenever you want.
 
 **Projects and Teams.** Each project can keep its own memory in its own Vault, and a search never crosses into another. Every key carries its own Read, Create, Update and Delete permissions. Share a Vault with teammates, give each member their own permissions, and every member's agents draw from and add to the same memory.
 
-**Safe and Private.** Saves are written to disk before they are sent, so an outage only delays them. Memories are stored in the EU, encrypted with AES-256, and exportable at any time.
+**Safe and Private.** Memories are stored in the EU from the first save, and their text is encrypted with AES-256. They are never sent to an outside AI service and never used to train AI models. Saves are written to disk before they are sent, so an outage only delays them.
 
 **Works Where You Work.** One command sets up Claude Code, Codex or OpenCode. Claude Desktop, Cursor, Cline and other MCP clients connect too.
 
@@ -197,7 +199,7 @@ Every record has `id`, `vault_id`, `content`, `created_at`, `updated_at`, `statu
 
 ## About Ragionex
 
-Ragionex is a context engine for AI agents. It keeps what your agents learn and returns it exactly as it was saved: it never rewrites a memory and never generates an answer, so the reasoning stays with your agent. Recall comes back in milliseconds, and the same question over the same memories always returns the same results.
+Ragionex is a context engine for AI agents. It never generates an answer, so the reasoning stays with your agent, and the same question over the same memories always returns the same results.
 
 ## Support
 
