@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { z } from "zod";
 
 /** Error thrown by api(). `status` is the HTTP status code, or undefined for
@@ -17,6 +18,9 @@ export class ApiError extends Error {
 }
 
 export const DEFAULT_API_BASE = "https://api.ragionex.com";
+
+export const VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
+export const USER_AGENT = `ragionex-memory-mcp/${VERSION}`;
 
 // Plain HTTP would carry the key in cleartext, so it is accepted only for this machine.
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];

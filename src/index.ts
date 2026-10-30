@@ -9,7 +9,6 @@
  * X-API-Key header on every request to api.ragionex.com.
  */
 
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -30,6 +29,8 @@ import {
 import {
   ApiError,
   DEFAULT_API_BASE,
+  USER_AGENT,
+  VERSION,
   identitySchema,
   normalizeApiBase,
   recordId,
@@ -47,8 +48,6 @@ import {
   type VaultSelection,
 } from "./vault-config.js";
 import { findRecallSearch, getRecallRemainder, storeRecallPage } from "./recall-pages.js";
-
-const { version: VERSION } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 // --- Commands (run-and-exit before booting the MCP server) -------------------
 // Without an argument this process is the MCP server, which is how agents
@@ -179,6 +178,7 @@ async function api<T>(opts: RequestOpts, context: CredentialContext & { vaultId?
     "X-API-Key": key,
     "Content-Type": "application/json",
     Accept: "application/json",
+    "User-Agent": USER_AGENT,
   };
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
   if (context.vaultId !== undefined) headers["X-Ragionex-Vault-Id"] = context.vaultId;

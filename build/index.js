@@ -1,15 +1,13 @@
 #!/usr/bin/env node
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { acknowledgePendingMemory, configureOfflineQueue, deferPendingMemory, discardPendingMemory, getQueueStatus, releasePendingMemory, stagePendingMemory, syncPendingNow, triggerFlush, } from "./offline-queue.js";
-import { ApiError, DEFAULT_API_BASE, identitySchema, normalizeApiBase, recordId, recordAckSchema, savedRecordSchema, trashRecordSchema, versionRecordSchema, writeFields, } from "./memory-contract.js";
+import { ApiError, DEFAULT_API_BASE, USER_AGENT, VERSION, identitySchema, normalizeApiBase, recordId, recordAckSchema, savedRecordSchema, trashRecordSchema, versionRecordSchema, writeFields, } from "./memory-contract.js";
 import { configError, readConfig, } from "./vault-config.js";
 import { findRecallSearch, getRecallRemainder, storeRecallPage } from "./recall-pages.js";
-const { version: VERSION } = createRequire(import.meta.url)("../package.json");
 const command = process.argv[2];
 if (command === "--version" || command === "-v") {
     console.log(VERSION);
@@ -98,6 +96,7 @@ async function api(opts, context) {
         "X-API-Key": key,
         "Content-Type": "application/json",
         Accept: "application/json",
+        "User-Agent": USER_AGENT,
     };
     if (opts.idempotencyKey)
         headers["Idempotency-Key"] = opts.idempotencyKey;

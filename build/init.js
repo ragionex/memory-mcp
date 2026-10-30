@@ -6,7 +6,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { applyEdits, createScanner, parseTree } from "jsonc-parser";
 import { isMissing, replaceFile, syncDirectory, writeNewPrivateFile } from "./durable-fs.js";
-import { DEFAULT_API_BASE, identitySchema, normalizeApiBase } from "./memory-contract.js";
+import { DEFAULT_API_BASE, USER_AGENT, identitySchema, normalizeApiBase } from "./memory-contract.js";
 import { SPOOL_DIR, countStoredSaves } from "./offline-queue.js";
 const MARKER_BEGIN = "<!-- ragionex-memory-mcp:priority-rule:begin -->";
 const MARKER_END = "<!-- ragionex-memory-mcp:priority-rule:end -->";
@@ -355,7 +355,7 @@ async function keyAccepted(apiKey, apiBase) {
     let response;
     try {
         response = await fetch(`${apiBase}/v1/memory/identity`, {
-            headers: { "X-API-Key": apiKey, Accept: "application/json" },
+            headers: { "X-API-Key": apiKey, Accept: "application/json", "User-Agent": USER_AGENT },
             signal: AbortSignal.timeout(KEY_CHECK_TIMEOUT_MS),
             redirect: "error",
         });

@@ -35,7 +35,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { applyEdits, createScanner, parseTree, SyntaxKind, type Edit, type ParseError } from "jsonc-parser";
 import { isMissing, replaceFile, syncDirectory, writeNewPrivateFile } from "./durable-fs.js";
-import { DEFAULT_API_BASE, identitySchema, normalizeApiBase } from "./memory-contract.js";
+import { DEFAULT_API_BASE, USER_AGENT, identitySchema, normalizeApiBase } from "./memory-contract.js";
 import { SPOOL_DIR, countStoredSaves } from "./offline-queue.js";
 
 // Marker pair wrapping our inline priority-rule block. PERMANENT PUBLIC CONTRACT
@@ -500,7 +500,7 @@ async function keyAccepted(apiKey: string, apiBase: string): Promise<boolean> {
   let response: Response;
   try {
     response = await fetch(`${apiBase}/v1/memory/identity`, {
-      headers: { "X-API-Key": apiKey, Accept: "application/json" },
+      headers: { "X-API-Key": apiKey, Accept: "application/json", "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(KEY_CHECK_TIMEOUT_MS),
       redirect: "error",
     });
