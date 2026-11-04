@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.ragionex/memory-mcp",
-  "description": "Persistent memory for AI agents - save once, recall in every session, project and tool.",
+  "description": "Self-learning memory for AI agents, powered by the Ragionex context engine.",
   "repository": {
     "url": "https://github.com/ragionex/memory-mcp",
     "source": "github"
   },
-  "version": "0.7.0",
+  "version": "0.8.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@ragionex/memory-mcp",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "transport": {
         "type": "stdio"
       },

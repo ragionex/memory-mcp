@@ -15,6 +15,7 @@ export class ApiError extends Error {
 export const DEFAULT_API_BASE = "https://api.ragionex.com";
 export const VERSION = createRequire(import.meta.url)("../package.json").version;
 export const USER_AGENT = `ragionex-memory-mcp/${VERSION}`;
+export const SETUP_COMMAND = `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @ragionex/memory-mcp@latest`;
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 export function normalizeApiBase(value) {
     let url;

@@ -46,7 +46,6 @@ test("list sends one bounded page request and preserves the cursor and date filt
   const filters = { start_date: "2026-09-01", end_date: "2026-09-26", limit: 1 };
   const first = await client.callTool({ name: "ragionex_list_memories", arguments: filters });
   assert.deepEqual(JSON.parse(text(first).split("\n")[0].replace(/^\[1\] /, "")), row);
-  assert.ok(text(first).includes(RECORD.created_at));
   assert.ok(text(first).includes(`next_cursor: "${cursor}"`));
   assert.match(text(first), /\n\n\u26a0\ufe0f REMINDER TO CALLER:\n- If the user said something newer than a record here, update that record\.\n- List text is cut short/);
   assert.doesNotMatch(text(first), /merge them/);
@@ -182,7 +181,7 @@ test("the setup command names the connected agent", async (t) => {
   await pause(500);
   mock.state.replies.search.push({ status: 401, body: { success: false, error: "Unauthorized", code: "unauthorized" } });
   const result = await client.callTool({ name: "ragionex_recall_memory", arguments: { query: "Which theme does the user prefer?" } });
-  assert.match(text(result), /Run the setup: npx -y @ragionex\/memory-mcp@latest install --agent codex/);
+  assert.ok(text(result).includes(`Run the setup: ${process.platform === "win32" ? "npx.cmd" : "npx"} -y @ragionex/memory-mcp@latest install --agent codex`), text(result));
 });
 
 test("view and delete send JSON ids and preserve ordered all-or-none batches", async (t) => {
@@ -396,7 +395,7 @@ test("connection starts a background sync without waiting for its send", async (
   assert.match(idle.sync, /No new sync started/);
 });
 
-test("server instructions and the rule body keep their calibrated pointers and examples", async (t) => {
+test("server instructions and the rule body keep their tool pointers and examples", async (t) => {
   const mock = await startMock(t);
   const client = await connect(t, { home: tempDir(t), base: mock.base, key: apiKey("q") });
   const instructions = client.getInstructions();

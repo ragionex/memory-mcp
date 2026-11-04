@@ -14,7 +14,6 @@ test("tool requests send the client label", async (t) => {
   await client.callTool({ name: "ragionex_list_memories", arguments: {} });
   assert.deepEqual(sent(mock.state.requests), [
     ["GET", "/v1/memory/identity", LABEL],
-    ["GET", "/v1/memory/list", LABEL],
     ["POST", "/v1/memory/write", LABEL],
     ["POST", "/v1/memory/search", LABEL],
     ["GET", "/v1/memory/list", LABEL],
@@ -41,5 +40,5 @@ test("the installer's setup requests send the client label", async (t) => {
   const box = machine(t);
   const result = await box.run(["install", "--agent", "claude-code", ...SETUP], { RAGIONEX_API_BASE: mock.base });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.deepEqual(sent(mock.state.requests), [["POST", "/v1/setup/verify", LABEL], ["GET", "/v1/memory/identity", LABEL]]);
+  assert.deepEqual(sent(mock.state.requests), [["POST", "/v1/setup/connect/redeem", LABEL], ["GET", "/v1/memory/identity", LABEL]]);
 });

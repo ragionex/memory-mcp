@@ -569,7 +569,7 @@ export function getQueueStatus(context: CredentialContext) {
   try {
     current = snapshot(connection);
   } catch (error) {
-    current.recovery.push({ path: connection?.directory ?? SPOOL_DIR, reason: `Local storage is unreadable (${cause(error)}).` });
+    current.recovery.push({ path: connection.directory, reason: `Local storage is unreadable (${cause(error)}).` });
   }
   for (const file of LEGACY_FILES) {
     try {
@@ -583,7 +583,7 @@ export function getQueueStatus(context: CredentialContext) {
   try {
     // A folder without pending or blocked saves has nothing to recover.
     otherConnections = connectionDirectories()
-      .filter(name => name !== connection?.id)
+      .filter(name => name !== connection.id)
       .filter(name => {
         const saves = storedSaves(join(SPOOL_DIR, name));
         return saves.pending + saves.blocked > 0;

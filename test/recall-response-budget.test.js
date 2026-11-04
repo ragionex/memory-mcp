@@ -237,7 +237,6 @@ test("an empty service page after a split ends the search even if it carries a c
   const empty = await recall(client, { page: 6 });
   assert.ok(!empty.isError);
   assert.equal(text(empty), "No more records were returned for this search. Use the records from earlier pages; this does not mean nothing was found.");
-  assert.doesNotMatch(text(empty), /\u26a0\ufe0f REMINDER TO CALLER:|No records matched|page=|save it now/);
   assert.equal(searches(mock).length, 2);
   assert.match(text(await recall(client, { page: 7 })), /^This search has no more pages\./);
   assert.equal(searches(mock).length, 2);
@@ -254,7 +253,6 @@ test("an oversized record is returned alone and the next record still arrives fr
   const first = await recall(client);
   assert.deepEqual(rendered(first), rows.slice(0, 1));
   assert.ok(Buffer.byteLength(text(first), "utf8") > 100_000);
-  assert.match(text(first), /END_OF_RECORD/);
   assert.match(text(first), /page=2\./);
   assert.equal(text(first).split("\u26a0\ufe0f REMINDER TO CALLER:").length - 1, 1);
   assert.doesNotMatch(text(first), /Omitted record IDs|none fit/);

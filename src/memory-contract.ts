@@ -21,6 +21,8 @@ export const DEFAULT_API_BASE = "https://api.ragionex.com";
 
 export const VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 export const USER_AGENT = `ragionex-memory-mcp/${VERSION}`;
+// PowerShell refuses npx.ps1 under Windows' default policy; npx.cmd runs in every Windows shell.
+export const SETUP_COMMAND = `${process.platform === "win32" ? "npx.cmd" : "npx"} -y @ragionex/memory-mcp@latest`;
 
 // Plain HTTP would carry the key in cleartext, so it is accepted only for this machine.
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];

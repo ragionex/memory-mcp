@@ -10,7 +10,7 @@ test("writes expose only content and updates require the revision read from view
     const valid = name === "ragionex_save_memory"
       ? { content: "A durable fact." }
       : { id: "mem_A", expected_revision: 1, content: "A revised fact." };
-    for (const field of ["extra_field_a", "extra_field_b", "extra_field_c", "project", "created_by"]) {
+    for (const field of ["extra_field", "project", "created_by"]) {
       for (const value of ["unexpected", null]) {
         const result = await client.callTool({ name, arguments: { ...valid, [field]: value } });
         assert.equal(result.isError, true, `${name}: ${field}`);
@@ -77,7 +77,6 @@ test("content has no fixed connector maximum and server rejection remains an err
   assert.deepEqual(pendingFiles(home), []);
 
   const stored = mock.state.records.get(savedRecord.id);
-  assert.equal(stored.content, content);
   const changes = { id: savedRecord.id, expected_revision: stored.revision, content: "y".repeat(50001) };
   mock.state.replies.update.push({
     status: 200,

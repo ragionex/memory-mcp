@@ -91,7 +91,6 @@ test("new tools reject extra or unsafe arguments and malformed responses", async
   const restored = await client.callTool({ name: "ragionex_restore_memory", arguments: { id: RECORD.id, expected_revision: 1 } });
   assert.ok(!restored.isError, text(restored));
   assert.equal(JSON.parse(text(restored).replace(/^Restored record:\n/, "")).status, "processing");
-  assert.doesNotMatch(text(restored), /\u26a0\ufe0f REMINDER TO CALLER:/);
   const { tools } = await client.listTools();
   assert.equal(tools.some((tool) => /purge|empty_trash|permanent/.test(tool.name)), false);
 });

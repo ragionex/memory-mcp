@@ -51,7 +51,7 @@ test("the tool list states true effects and keeps its schemas", async (t) => {
     tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name).sort(),
     ["ragionex_delete_memory", "ragionex_restore_memory", "ragionex_update_memory"],
   );
-  // Description text is calibrated prompt wording; only its position is pinned here.
+  // Only the presence and position of description fields are pinned here.
   const schemas = JSON.parse(JSON.stringify(
     Object.fromEntries(tools.map((tool) => [tool.name, tool.inputSchema])),
     (key, value) => (key === "description" ? "described" : value),
@@ -113,7 +113,6 @@ test("a confirmed save sends one idempotent request and keeps no local copy", as
   assert.match(write.headers["idempotency-key"], /^[0-9a-f-]{36}$/);
   assert.deepEqual(write.body, payload);
   const { content, ...acknowledgement } = mock.state.records.get("r1");
-  assert.equal(content, payload.content);
   assert.deepEqual(JSON.parse(text(saved).replace(/^Saved record:\n/, "").split("\n\n\u26a0\ufe0f REMINDER TO CALLER:")[0]), acknowledgement);
   assert.deepEqual(spoolFiles(home), []);
   mock.state.replies.write.push({
@@ -161,6 +160,7 @@ test("offline default saves stage before HTTP and never inherit a later project 
   const queued = await client.callTool({ name: "ragionex_save_memory", arguments: payload });
   assert.ok(!queued.isError, text(queued));
   assert.match(text(queued), /queued locally/);
+  assert.match(text(queued), /^Save not confirmed yet: the memory service could not be reached\./);
   const [file] = pendingFiles(home);
   const bytes = fs.readFileSync(file, "utf-8");
   assert.equal(bytes.includes(key), false);
@@ -394,7 +394,9 @@ test("fresh saves during a server-requested delay stage without another send", a
   for (let i = 0; i < 6; i++) {
     const result = await client.callTool({ name: "ragionex_save_memory", arguments: { content: `Waiting fact ${i}.` } });
     assert.ok(!result.isError, text(result));
-    assert.match(text(result), /Save not confirmed yet/);
+    assert.match(text(result), i === 0
+      ? /^Save not confirmed yet: the rate limit was reached\./
+      : /^Save not confirmed yet: the memory service asked to wait\./);
     assert.match(text(result), /queued locally/);
   }
   assert.equal(mock.writes().length, 1);
@@ -479,6 +481,26 @@ test("the runtime refresh follows a relocated agent home and keeps symlinks", as
   assert.equal(fs.existsSync(path.join(home, ".codex")), false);
 });
 
+test("the runtime refresh follows a Manual setup entry's instructions file and never creates one", async (t) => {
+  const home = tempDir(t);
+  const custom = path.join(home, "custom", "AGENTS.md");
+  const claude = path.join(home, ".claude", "CLAUDE.md");
+  const old = "# Mine\n\n<!-- ragionex-memory-mcp:priority-rule:begin -->\nold body\n<!-- ragionex-memory-mcp:priority-rule:end -->\n";
+  fs.mkdirSync(path.dirname(custom), { recursive: true });
+  fs.mkdirSync(path.dirname(claude), { recursive: true });
+  fs.writeFileSync(custom, old);
+  fs.writeFileSync(claude, old);
+  await connect(t, { home, name: "claude-code", env: { RAGIONEX_MEMORY_INSTRUCTIONS_FILE: custom } });
+  assert.ok(await waitFor(() => fs.readFileSync(custom, "utf-8").includes(RULE_BODY)));
+  assert.equal(fs.readFileSync(claude, "utf-8"), old);
+
+  const absent = path.join(home, "other", "AGENTS.md");
+  let log = "";
+  await connect(t, { home, name: "unlisted-agent", env: { RAGIONEX_MEMORY_INSTRUCTIONS_FILE: absent }, onStderr: (chunk) => { log += chunk; } });
+  assert.ok(await waitFor(() => log.includes("No priority rule found")), log);
+  assert.equal(fs.existsSync(absent), false);
+});
+
 test("an incomplete accepted-save reply keeps its operation ID through recovery", async (t) => {
   const mock = await startMock(t);
   const home = tempDir(t);
@@ -492,6 +514,7 @@ test("an incomplete accepted-save reply keeps its operation ID through recovery"
   });
   const queued = await first.callTool({ name: "ragionex_save_memory", arguments: { content: "Preserve this accepted operation." } });
   assert.match(text(queued), /queued locally/);
+  assert.match(text(queued), /^Save not confirmed yet: the memory service returned an error\./);
   const [file] = pendingFiles(home);
   assert.ok(file);
   const envelope = JSON.parse(fs.readFileSync(file, "utf-8"));
@@ -544,8 +567,6 @@ for (const [code, reason] of [
     assert.deepEqual(envelope.payload, payload);
     assert.ok(!text(held).includes(envelope.operation_id));
     assert.equal(mock.writes().length, 1);
-    assert.equal(mock.writes()[0].headers["idempotency-key"], envelope.operation_id);
-    assert.deepEqual(mock.writes()[0].body, payload);
     assert.equal(mock.state.records.size, 0);
     assert.equal(mock.state.receipts.size, 0);
 

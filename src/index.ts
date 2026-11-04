@@ -29,6 +29,7 @@ import {
 import {
   ApiError,
   DEFAULT_API_BASE,
+  SETUP_COMMAND,
   USER_AGENT,
   VERSION,
   identitySchema,
@@ -89,14 +90,9 @@ let installAgent = "<your-agent>";
 function keySetupStep(): string {
   return installAgent === "<your-agent>"
     ? "Create a key at https://app.ragionex.com/keys and add it to this client's MCP configuration as RAGIONEX_MEMORY_API_KEY."
-    : `Run the setup: npx -y @ragionex/memory-mcp@latest install --agent ${installAgent}`;
+    : `Run the setup: ${SETUP_COMMAND} install --agent ${installAgent}`;
 }
 
-// Offered on a connection check while the selected Vault is empty: the moment right
-// after setup to bring in what the agent already knows.
-function importOffer(rulesFile: string | undefined): string {
-  return `This Vault has no memories yet. Offer the user, in one sentence, to import what you already know about them and their projects. Only if they agree: read ${rulesFile ?? "the user's global agent rules file"}, the rules file of this project and your own local memory files for this project. Save each lasting preference, decision and project fact from them as its own memory, with the recall before every save, and skip the Ragionex Memory block, anything temporary and anything already saved. Leave those files unchanged. Then call ragionex_list_memories to confirm what was saved, and tell the user in a few lines what was saved and what was skipped.`;
-}
 
 // Path-specific guidance reaches the agent exactly when a decision depends on it.
 // Opens the sentence an error ends with: what the agent must tell the user.
@@ -271,7 +267,7 @@ async function api<T>(opts: RequestOpts, context: CredentialContext & { vaultId?
         ? "Pay-as-you-go is currently unavailable."
         : "The account's plan limit has been reached.";
     } else if (res.status === 400 && code === "content_too_long") {
-      guidance = "Nothing was saved. Split the content into as few parts as the limit allows. Cut only between sections, start each part with the document name and part number, and save every part. Never summarize to make it fit.";
+      guidance = "Nothing was saved. Split the content into as few parts as the limit allows. Cut only between sections, start each part with the document name and part number, and save every part; for an update, put the first part in this record and save the others as new records. Never summarize to make it fit.";
     } else if (res.status === 429) {
       guidance = `The rate limit has been reached. ${retry}`;
     } else if (res.status === 503 && retryAfterMs !== undefined) {
@@ -451,16 +447,6 @@ server.registerTool(
     const targetAvailable = identity === null
       ? null
       : identity.vaults.some(vault => vault.vault_id === target);
-    // The offer is optional, so a failed check only leaves it out.
-    let empty = false;
-    if (identity?.vaults.find(vault => vault.vault_id === target)?.permissions.includes("read")) {
-      try {
-        const page = await api<{ memories: unknown }>({ method: "GET", path: "/v1/memory/list?limit=1", wakeQueue: false }, context);
-        empty = Array.isArray(page.memories) && page.memories.length === 0;
-      } catch {
-        // Without the check, no offer is made.
-      }
-    }
     const data = {
       identity,
       target_vault_id: target,
@@ -473,14 +459,9 @@ server.registerTool(
         ? "Pending-save sync started in the background. This does not confirm that pending saves are saved."
         : "No new sync started. Check pending saves, retry time, and storage errors in the queue status.",
     };
-    const content = [{ type: "text" as const, text: JSON.stringify(data, null, 2) }];
-    if (empty) {
-      const { rulesFileForClient } = await import("./init.js");
-      content.push({ type: "text" as const, text: agentReminder([importOffer(rulesFileForClient(server.server.getClientVersion()))]) });
-    }
     return {
       ...((error || targetAvailable === false) ? { isError: true } : {}),
-      content,
+      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     };
   },
 );
@@ -536,7 +517,7 @@ server.registerTool(
           return {
             content: [{
               type: "text",
-              text: `Save not confirmed yet: the memory service is unavailable. The save is queued locally and will be sent automatically; until then it will not show in recall or list. Do not save it again; ragionex_memory_connection shows waiting saves. Tell the user it is not saved yet, and if the recall before it failed, that no duplicate check was possible.`,
+              text: `Save not confirmed yet: ${entry.deferred ? "the memory service asked to wait" : error instanceof ApiError && error.status === 429 ? "the rate limit was reached" : error instanceof ApiError && error.status !== undefined ? "the memory service returned an error" : "the memory service could not be reached"}. The save is queued locally and will be sent automatically; until then it will not show in recall or list. Do not save it again; ragionex_memory_connection shows waiting saves. Tell the user it is not saved yet, and if the recall before it failed, that no duplicate check was possible.`,
             }],
           };
         }

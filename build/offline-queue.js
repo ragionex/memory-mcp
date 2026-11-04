@@ -483,7 +483,7 @@ export function getQueueStatus(context) {
         current = snapshot(connection);
     }
     catch (error) {
-        current.recovery.push({ path: connection?.directory ?? SPOOL_DIR, reason: `Local storage is unreadable (${cause(error)}).` });
+        current.recovery.push({ path: connection.directory, reason: `Local storage is unreadable (${cause(error)}).` });
     }
     for (const file of LEGACY_FILES) {
         try {
@@ -498,7 +498,7 @@ export function getQueueStatus(context) {
     let otherConnections = 0;
     try {
         otherConnections = connectionDirectories()
-            .filter(name => name !== connection?.id)
+            .filter(name => name !== connection.id)
             .filter(name => {
             const saves = storedSaves(join(SPOOL_DIR, name));
             return saves.pending + saves.blocked > 0;
