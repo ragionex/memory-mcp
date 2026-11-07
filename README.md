@@ -14,7 +14,7 @@ Keep each project in its own Vault, give every key only the access it needs, and
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/d79f3MDVd4)
 
-<a href="https://ragionex.com/setup"><b>Set Up in One Line</b></a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/docs">Documentation</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/pricing">Pricing</a>
+<a href="https://ragionex.com/docs/guides/add-memory-mcp/"><b>Setup Guide</b></a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/docs">Documentation</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href="https://ragionex.com/pricing">Pricing</a>
 
 </div>
 
@@ -26,17 +26,66 @@ Keep each project in its own Vault, give every key only the access it needs, and
 
 ## Quick Start
 
-### Set Up with Your Agent
+### &#x1F916; Let Your Agent Set It Up
 
-Paste this into your agent:
+<details>
+<summary><b>Setup Prompt: click to open, then paste it into your agent</b></summary>
 
-```text
-Set up Ragionex Memory for yourself by following the instructions at https://ragionex.com/setup.
-```
+````text
+# Set up Ragionex Memory
 
-> **If you are an AI agent:** follow the instructions at https://ragionex.com/setup.
+Set up Ragionex Memory for yourself, the agent I am talking to.
 
-### Set It Up Yourself
+## What it is
+
+Ragionex is a context engine for AI agents, and Ragionex Memory is its long-term memory. It lets you remember across our sessions, so I do not have to repeat myself:
+- You save what is worth keeping while we work: decisions, preferences, project facts, what was tried and how it went. You update what changes and delete what turns out wrong.
+- When you need something, you ask in plain language and get back the memories that answer it, exactly as they were saved.
+- Memories live in Vaults, for example one per project. I can share a Vault with teammates and their agents and choose what each of them may do.
+- Every edit keeps the earlier version, and deleted memories wait in a trash, both for 30 days.
+
+This setup runs commands on this computer. If you cannot run commands here, for example in the Claude app's chat, stop and tell me.
+
+## Your agent code
+
+| Agent | Code |
+|---|---|
+| Claude Code (in a terminal, an IDE or the Claude app's Code tab) | `claude-code` |
+| Codex | `codex` |
+| OpenCode | `opencode` |
+| Hermes Agent | `hermes` |
+| Any agent not named in this table | `manual` |
+
+## Follow these steps in order
+
+The setup you run will sometimes print notes that start with "AI agents:". They are there to help you: they guide you and remind you of each step when it comes up, so you do not forget anything. Follow those instructions too.
+
+1. Run `node --version`. The setup needs Node.js 18 or later. If it is missing or older, ask me to install it from https://nodejs.org and wait until I say it is done.
+2. Run this yourself, with your code from the table. On Windows, use `npx.cmd` instead of `npx`. It needs network access; if your sandbox blocks the network, ask me to allow it. The first run can take up to two minutes.
+   ```
+   npx -y @ragionex/memory-mcp@latest install --agent-mode --agent <code>
+   ```
+3. With `manual`, the setup prints an MCP server entry. Add it to your own MCP settings file in that file's format. Then run the step 2 command again with the full paths of your global instructions file and your MCP settings file added:
+   ```
+   npx -y @ragionex/memory-mcp@latest install --agent-mode --agent manual --instructions-file <path> --mcp-config <path>
+   ```
+4. The setup prints a sign-in link and stops. Give me the link and do not open it yourself: it approves the connection for my account. I will sign in and paste the one-time code from that page here.
+5. Run the same command again with the link and my code added. With `manual`, keep the two paths from step 3 in it.
+   ```
+   npx -y @ragionex/memory-mcp@latest install --agent-mode --agent <code> --link <link> --code <one-time code>
+   ```
+   This connects you:
+   - Your MCP settings get a `ragionex-memory-mcp` entry with an API key made for you alone. The key is never shown.
+   - Your global instructions file gets a marked Ragionex Memory block that tells you when to recall and when to save. It goes there because, to save context, agents such as Claude Code load MCP tool descriptions only when they need them and cut long ones short, so guidance kept in the tools alone can go unseen. Your global instructions file is read at the start of every session, so the block is always in view. Text outside the block stays as it is, and the file is backed up before the first change. The new block may appear in this conversation; that is expected.
+   - You do not need to do anything here: the setup adds the block, and the server updates it on its own whenever a new version brings fixes or improvements. I am telling you only so you know what it is. Everything can be removed later with the setup's `uninstall` command.
+6. When the setup says "Ragionex Memory is ready", tell me exactly what it says to do next, usually to quit you completely and open you again in a new session.
+
+At any step: if the setup says to wait, tell me how long instead of waiting yourself. If it reports a problem, tell me the problem and the fix it names. To see what a command or flag does, run `npx -y @ragionex/memory-mcp@latest --help` (`npx.cmd` on Windows).
+````
+
+</details>
+
+### &#x1F9D1;&#x200D;&#x1F4BB; Set It Up Yourself
 
 In a terminal, on Windows (PowerShell or Command Prompt):
 
@@ -53,7 +102,7 @@ npx -y @ragionex/memory-mcp@latest install
 1. Pick your agent. If the setup finds one on your computer, press Enter.
 2. Press Enter to open the link in your browser, then sign in. A new account is free, no credit card needed.
 3. Copy the one-time code the page shows and paste it into the terminal.
-4. Quit your agent completely and open it again in a new session. From here on, just work: it uses Ragionex Memory on its own.
+4. Follow the last step the setup shows, usually quitting your agent completely and opening it again in a new session. From here on, just work: it uses Ragionex Memory on its own.
 
 If your agent is not listed and has a global instructions file, choose manual setup. Run the setup once for each agent you use.
 
