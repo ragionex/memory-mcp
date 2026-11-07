@@ -76,9 +76,10 @@ test("a run without a terminal prints the menu with its flags, then the link, th
     "  1) Claude Code (found)",
     "  2) Codex",
     "  3) OpenCode",
-    "  4) My agent is not in the list (manual setup)",
+    "  4) Hermes Agent",
+    "  5) My agent is not in the list (manual setup)",
     "",
-    "AI agents: run this again with your own agent code (claude-code, codex, opencode), or with --manual if you are not in the list:",
+    "AI agents: run this again with your own agent code (claude-code, codex, opencode, hermes), or with --manual if you are not in the list:",
     `  ${COMMAND} install --agent-mode --agent <code>`,
     "",
   ].join("\n"));
@@ -474,7 +475,7 @@ test("a terminal run without an agent code preselects the one agent found and co
   const mock = await startMock(t);
   const box = machine(t);
   const result = await terminalInstall(box, mock, [
-    ["Which one? [1-4, Enter = 1] ", "\r"],
+    ["Which one? [1-5, Enter = 1] ", "\r"],
     ["the code here: ", "K7QF-M2XR\r"],
   ], ["install"]);
   assert.deepEqual(result.unanswered, [], result.output);
@@ -482,7 +483,7 @@ test("a terminal run without an agent code preselects the one agent found and co
   assert.match(result.output, /Which agent should get Ragionex Memory\?/);
   assert.match(result.output, /1\) Claude Code \(found\)/);
   assert.doesNotMatch(result.output, /Codex \(found\)/);
-  assert.match(result.output, /4\) My agent is not in the list \(manual setup\)/);
+  assert.match(result.output, /5\) My agent is not in the list \(manual setup\)/);
   opensWithAgentLine(result.output);
   assert.equal(claudeEnv(box.home).RAGIONEX_MEMORY_API_KEY, mock.state.issued[0]);
 });
@@ -491,7 +492,7 @@ test("several agents found are all marked and none is preselected", { skip: NO_T
   const mock = await startMock(t);
   const box = machine(t, { folders: [".claude", ".codex"] });
   const result = await terminalInstall(box, mock, [
-    ["Which one? [1-4] ", "2\r"],
+    ["Which one? [1-5] ", "2\r"],
     ["the code here: ", "K7QF-M2XR\r"],
   ], ["install"]);
   assert.deepEqual(result.unanswered, [], result.output);
@@ -504,7 +505,7 @@ test("several agents found are all marked and none is preselected", { skip: NO_T
 test("the agent menu can be cancelled", { skip: NO_TERMINAL }, async (t) => {
   const mock = await startMock(t);
   const box = machine(t);
-  const result = await terminalInstall(box, mock, [["Which one? [1-4, Enter = 1] ", "\x04"]], ["install"]);
+  const result = await terminalInstall(box, mock, [["Which one? [1-5, Enter = 1] ", "\x04"]], ["install"]);
   assert.deepEqual(result.unanswered, [], result.output);
   assert.equal(result.status, 1, result.output);
   assert.match(result.output, /Setup was cancelled\./);
@@ -545,7 +546,7 @@ test("uninstall honours agent mode in a terminal, and a terminal uninstall opens
     assert.ok(terminal.output.replace(/\r\n/g, "\n").endsWith(plain.stdout), terminal.output);
     assert.doesNotMatch(terminal.output, /waits for your input/);
   }
-  const menu = await terminalInstall(box, mock, [["Which one? [1-4] ", "\x04"]], ["uninstall"]);
+  const menu = await terminalInstall(box, mock, [["Which one? [1-5] ", "\x04"]], ["uninstall"]);
   assert.deepEqual(menu.unanswered, [], menu.output);
   assert.equal(menu.status, 1, menu.output);
   opensWithAgentLine(menu.output, "uninstall");

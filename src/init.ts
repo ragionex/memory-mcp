@@ -67,6 +67,8 @@ const LOOSE_RE = /ragionex-memory-mcp:priority-rule/;
 // clientId:   the `clientInfo.name` the agent sends in the MCP initialize
 //   handshake. This is how the RUNNING server identifies its launching agent.
 //   An exact match is required; a mismatch silently prevents rule refresh.
+//   Absent while that name is not captured: the agent's entry then names its
+//   rules file in RAGIONEX_MEMORY_INSTRUCTIONS_FILE, which the refresh follows.
 // footprint:  a path under the user's home dir whose existence means the agent
 //   is installed. Nothing on disk selects an agent for install, and detection
 //   never grants permission to write an agent's files.
@@ -77,6 +79,10 @@ const LOOSE_RE = /ragionex-memory-mcp:priority-rule/;
 //   before PATH.
 // extraClis: where the agent's CLI may live off PATH, tried in order when PATH
 //   has none.
+// addInput: what the agent's add command reads from standard input: the answers
+//   to the questions it asks before saving. Its exit status is not known to say
+//   whether anything changed, so for such an agent only its config decides, for
+//   a remove as for an add.
 // removeArgs: absent when the agent ships no removal command; unregistering
 //   then edits configFile directly at configKey.
 // homeVariable: relocates the agent's home, and the footprint, rules file and
@@ -87,8 +93,21 @@ const LOOSE_RE = /ragionex-memory-mcp:priority-rule/;
 //   shared by install and uninstall; it throws when the text cannot be judged.
 // presenceCheckArgs: the agent's own load of its config, run first so a file
 //   the agent cannot parse never counts as registered or absent.
+// releaseMs: how long the running agent may keep serving an entry after it is
+//   removed; it keeps an old server running when an entry's settings change. A
+//   replaced entry is added again only after this, and an uninstall that removed
+//   the entry waits as long, so an install right after it gets a new server.
 // spliceCheckArgs: the agent's own load of a config we spliced; a failure
 //   restores the original file.
+// locate: the agent at the files its own CLI names now, or a clause saying why
+//   they are unknown. Its active profile moves its files, so install and
+//   uninstall use it before anything else.
+// identityFile: the rules file is the agent's identity. An absent or empty file
+//   means the agent's built-in identity, which a file holding only the rule
+//   would replace, so install stops before a link instead.
+// newSession: how the agent loads a changed setup, opening the closing sentence
+//   of install and of uninstall; absent means quitting the agent and opening it
+//   again.
 // enabled:    agents whose global rules load automatically and can hold
 //   the full rule block.
 // ---------------------------------------------------------------------------
@@ -109,7 +128,7 @@ const PATH_PLACEHOLDER = "SETUP_FILLS_PATH";
 interface AgentTarget {
   key: string;
   displayName: string;
-  clientId: string;
+  clientId?: string;
   responseBudgetBytes: number;
   folderSource: "claude-project-dir" | "roots" | "unavailable";
   homeVariable?: string;
@@ -121,12 +140,17 @@ interface AgentTarget {
   extraClis?: () => string[];
   // env holds NAME=value pairs for the server.
   addArgs: (env: string[]) => string[];
+  addInput?: string;
   removeArgs?: string[];
   registrationPresent: (content: string) => boolean;
   presenceCheckArgs?: string[];
   removeBeforeAdd?: boolean;
+  releaseMs?: number;
   configKey?: string;
   spliceCheckArgs?: string[];
+  locate?: (cli: string) => AgentTarget | string;
+  identityFile?: boolean;
+  newSession?: { install: string; uninstall: string };
   enabled: boolean;
 }
 
@@ -293,6 +317,93 @@ function claudeCodeCopies(home: string): string[] {
   return [path.join(home, ".local", "bin", program), ...copies.map((copy) => copy.file)];
 }
 
+// Hermes Agent's settings are YAML with MCP servers in the top-level mcp_servers map, which
+// Hermes writes in block style; our entry is one key of that map. A layout this scan cannot
+// place with certainty throws, so no decision rests on a guess.
+function hermesEntryPresent(content: string): boolean {
+  const lines = content.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const keyOf = (name: string) => new RegExp(`^(?:${name}|"${name}"|'${name}')[ \\t]*:(?:[ \\t]|$)`);
+  const sections = lines.flatMap((line, i) => (keyOf("mcp_servers").test(line) ? [i] : []));
+  if (sections.length === 0) return false;
+  if (sections.length > 1) throw new Error("mcp_servers is set more than once");
+  const head = lines[sections[0]];
+  const value = head.slice(head.indexOf(":") + 1).replace(/(?:^|[ \t])#.*$/, "").trim();
+  if (/^(?:\{\s*\}|~|null|Null|NULL)$/.test(value)) return false;
+  if (value !== "") throw new Error("mcp_servers is not written as a block");
+  const entry = keyOf(SERVER_NAME);
+  let indent = 0;
+  let found = false;
+  for (const line of lines.slice(sections[0] + 1)) {
+    const text = line.trimStart();
+    if (text === "" || text.startsWith("#")) continue;
+    const depth = line.length - text.length;
+    if (depth === 0) break;
+    indent ||= depth;
+    if (depth > indent) continue;
+    if (depth < indent || /^-(?:[ \t]|$)/.test(text)) throw new Error("mcp_servers is not a map");
+    if (entry.test(text)) {
+      if (found) throw new Error(`"${SERVER_NAME}" is set more than once`);
+      found = true;
+    }
+  }
+  return found;
+}
+
+// Hermes Agent at one home, which holds its config.yaml and its SOUL.md.
+function hermesAgent(home: string): AgentTarget {
+  const rulesFile = path.join(home, "SOUL.md");
+  const [command, ...launch] = SERVER_COMMAND;
+  return {
+    key: "hermes",
+    displayName: "Hermes Agent",
+    // No clientId: Hermes' handshake name is not captured, so its server refreshes SOUL.md through
+    // RAGIONEX_MEMORY_INSTRUCTIONS_FILE. The budget and folder source are an unknown client's.
+    responseBudgetBytes: 30_000,
+    folderSource: "unavailable",
+    footprint: home,
+    rulesFile,
+    configFile: path.join(home, "config.yaml"),
+    cli: "hermes",
+    // --args takes the rest of the line, so it comes last.
+    addArgs: (env) => [
+      "mcp", "add", SERVER_NAME, "--command", command,
+      "--env", ...env, `RAGIONEX_MEMORY_INSTRUCTIONS_FILE=${rulesFile}`,
+      "--args", ...launch,
+    ],
+    // One Enter accepts "Enable all tools" and declines "Overwrite" and "Save config anyway";
+    // a yes to "Save config anyway" would save the entry disabled.
+    addInput: "\n",
+    removeArgs: ["mcp", "remove", SERVER_NAME],
+    registrationPresent: hermesEntryPresent,
+    removeBeforeAdd: true,
+    // The gateway a Hermes Agent session starts, on every platform, runs its MCP servers. It
+    // re-reads mcp_servers every 60 seconds, skips its first check after it starts and never
+    // restarts an entry whose settings changed: two checks plus a margin. The setup's texts say
+    // about 2 minutes and ask AI agents for a command limit of at least 5 minutes, so a longer
+    // wait changes them too.
+    releaseMs: 130_000,
+    // Only Hermes knows the profile `hermes profile use` made sticky, so its own answer names the home.
+    locate: (cli) => {
+      const shown = runCli(cli, ["config", "path"]);
+      const file = shown.ok
+        ? shown.detail.split(/\r?\n/).map((line) => line.trim()).reverse()
+          .find((line) => path.isAbsolute(line) && path.basename(line) === "config.yaml")
+        : undefined;
+      return file === undefined
+        ? `\`hermes config path\` did not show where its settings are (${cliOutput(shown.detail)})`
+        : hermesAgent(path.dirname(file));
+    },
+    identityFile: true,
+    // A new session reads SOUL.md again. The gateway starts a new entry within two checks; an
+    // uninstall has already waited for it to let go of the removed one.
+    newSession: {
+      install: "Hermes Agent starts new connections in the background within about 2 minutes. After that, start a new Hermes Agent session (type /new)",
+      uninstall: "Start a new Hermes Agent session (type /new)",
+    },
+    enabled: true,
+  };
+}
+
 function agentRegistry(): AgentTarget[] {
   const home = os.homedir();
   const claudeHome = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"));
@@ -301,6 +412,10 @@ function agentRegistry(): AgentTarget[] {
     process.env.XDG_CONFIG_HOME || path.join(home, ".config"),
     "opencode",
   );
+  // Only marks Hermes Agent as found: install and uninstall take its active home from Hermes itself.
+  const hermesHome = path.resolve(process.env.HERMES_HOME || (process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "hermes")
+    : path.join(home, ".hermes")));
   return [
     {
       key: "claude-code",
@@ -406,6 +521,7 @@ function agentRegistry(): AgentTarget[] {
       },
       enabled: true,
     },
+    hermesAgent(hermesHome),
   ];
 }
 
@@ -948,7 +1064,7 @@ async function removeBlock(target: string): Promise<RemoveResult> {
 // ---------------------------------------------------------------------------
 // Registration - delegated to each agent's own CLI
 // ---------------------------------------------------------------------------
-// The three agents store MCP registrations in three formats in three places.
+// Each agent stores MCP registrations in its own format and place.
 // Letting each agent's own command write its own file means their format
 // changes cannot break us, and scoping/validation stay with the file's owner.
 
@@ -959,23 +1075,27 @@ interface CliResult {
 
 // stdin is never inherited: an agent CLI that decides to prompt gets EOF and
 // fails fast instead of hanging an install that an AI assistant is running
-// unattended. shell:false keeps the API key out of any shell parsing. A bare
+// unattended; an agent CLI that asks before it saves gets exactly its answers,
+// then EOF. shell:false keeps the API key out of any shell parsing. A bare
 // command name on Windows is usually a .cmd shim that only cmd.exe can start, and
 // cmd.exe would split an argument with spaces or act on & | < > ^ ( ), so such
 // arguments are quoted.
-function runCli(cli: string, args: string[]): CliResult {
+function runCli(cli: string, args: string[], input?: string): CliResult {
   const shell = process.platform === "win32" && !path.isAbsolute(cli);
   const quoted = shell ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
+  const stdio: ("ignore" | "pipe")[] = [input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
   // Windows passes one command line because Node warns when a shell also receives an args array.
   const r = shell
     ? spawnSync([cli, ...quoted].join(" "), {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio,
+        input,
         encoding: "utf-8",
         timeout: 60_000,
         shell: true,
       })
     : spawnSync(cli, args, {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio,
+        input,
         encoding: "utf-8",
         timeout: 60_000,
         shell: false,
@@ -1052,7 +1172,7 @@ function isRegistered(agent: AgentTarget, cli: string | null, content: string | 
 
 // Registers the server through the agent's own CLI and confirms it in the agent's
 // config. Returns null on success, otherwise a clause that says what went wrong.
-function register(agent: AgentTarget, cli: string, apiKey: string, apiBase: string): string | null {
+async function register(agent: AgentTarget, cli: string, apiKey: string, apiBase: string): Promise<string | null> {
   let original: Buffer | null;
   try {
     original = fs.readFileSync(agent.configFile);
@@ -1061,8 +1181,8 @@ function register(agent: AgentTarget, cli: string, apiKey: string, apiBase: stri
     original = null;
   }
 
-  // Claude Code refuses to overwrite an existing entry and keeps its old env, so an
-  // existing entry is removed first.
+  // Claude Code refuses to overwrite an existing entry and keeps its old env, and Hermes Agent
+  // keeps serving an entry whose settings change, so an existing entry is removed first.
   let present = false;
   if (agent.removeBeforeAdd) {
     const found = isRegistered(agent, cli, original?.toString("utf-8") ?? null);
@@ -1098,10 +1218,19 @@ function register(agent: AgentTarget, cli: string, apiKey: string, apiBase: stri
 
   if (present && agent.removeArgs) {
     const removed = runCli(cli, agent.removeArgs);
-    if (!removed.ok) return settle(`its old Ragionex entry could not be removed (${cliOutput(removed.detail)})`);
+    if (!removed.ok && agent.addInput === undefined) {
+      return settle(`its old Ragionex entry could not be removed (${cliOutput(removed.detail)})`);
+    }
+    const release = agent.releaseMs;
+    if (release) {
+      console.log(`${agent.displayName} keeps its connections running in the background, so it needs about 2 minutes to let go of the old Ragionex Memory connection. The setup waits, then adds the new one.`);
+      await new Promise<void>((resolve) => setTimeout(resolve, release));
+    }
   }
-  const added = runCli(cli, agent.addArgs(serverEnv(agent, apiKey, apiBase)));
-  if (!added.ok) return settle(`the Ragionex entry could not be added (${cliOutput(added.detail)})`);
+  const added = runCli(cli, agent.addArgs(serverEnv(agent, apiKey, apiBase)), agent.addInput);
+  if (!added.ok && agent.addInput === undefined) {
+    return settle(`the Ragionex entry could not be added (${cliOutput(added.detail)})`);
+  }
 
   // Read back the config rather than trusting the CLI exit code alone.
   let written: string | null = null;
@@ -1315,21 +1444,27 @@ export interface ClientIdentity {
   version?: string;
 }
 
+// The listed agent that launched this server. An agent whose handshake name was never captured
+// has no clientId and never matches; its entry names its rules file instead.
+function launchingAgent(client: ClientIdentity | undefined): AgentTarget | undefined {
+  return agentRegistry().find((agent) => agent.enabled && agent.clientId !== undefined && agent.clientId === client?.name);
+}
+
 export function agentKeyForClient(client: ClientIdentity | undefined): string | undefined {
-  return agentRegistry().find((a) => a.enabled && a.clientId === client?.name)?.key;
+  return launchingAgent(client)?.key;
 }
 
 export function responseBudgetForClient(client: ClientIdentity | undefined): number {
-  return agentRegistry().find((agent) => agent.enabled && agent.clientId === client?.name)?.responseBudgetBytes ?? 30_000;
+  return launchingAgent(client)?.responseBudgetBytes ?? 30_000;
 }
 
 export function folderSourceForClient(client: ClientIdentity | undefined): AgentTarget["folderSource"] {
-  return agentRegistry().find((agent) => agent.enabled && agent.clientId === client?.name)?.folderSource ?? "unavailable";
+  return launchingAgent(client)?.folderSource ?? "unavailable";
 }
 
 export async function refreshForClient(client: ClientIdentity | undefined): Promise<void> {
   try {
-    const agent = agentRegistry().find((a) => a.enabled && a.clientId === client?.name);
+    const agent = launchingAgent(client);
     // A Manual setup entry names its agent's instructions file, which comes before the listed row.
     const manualFile = process.env.RAGIONEX_MEMORY_INSTRUCTIONS_FILE;
     const rulesFile = manualFile || agent?.rulesFile;
@@ -1569,7 +1704,7 @@ async function connectAgent(
   apiBase: string,
   notes: string[],
 ): Promise<{ cause: string; problem: string } | { problem: string; next: string } | null> {
-  const problem = register(agent, cli, issued.key, apiBase);
+  const problem = await register(agent, cli, issued.key, apiBase);
   if (problem !== null) {
     // The dashboard lists the new key under this name and number; a re-run creates another.
     return {
@@ -1587,7 +1722,7 @@ async function runInstall(argv: string[]): Promise<number> {
   const args = parseArgs(argv, "install");
   const apiBase = normalizeApiBase(process.env.RAGIONEX_API_BASE ?? DEFAULT_API_BASE);
   const { interactive, setup } = args;
-  const choice = await chooseAgent(args, "install");
+  let choice = await chooseAgent(args, "install");
   // In agent mode, the menu was printed with the flags that answer it.
   if (choice === null) return 0;
   const name = choice.agent?.displayName ?? "your agent";
@@ -1654,6 +1789,17 @@ async function runInstall(argv: string[]): Promise<number> {
     if (found === null) return fallback(choice.agent, setup, "it was not found on this device");
     if (found.origin) console.log(`${found.origin}.`);
     cli = found.command;
+    const located = choice.agent.locate?.(cli) ?? choice.agent;
+    if (typeof located === "string") return fallback(choice.agent, setup, located);
+    choice = { agent: located, manual: false };
+    if (located.identityFile && !readOrEmpty(located.rulesFile).trim()) {
+      return notReady(
+        `${located.rulesFile} is missing or empty. ${name} takes its identity from this file, so the setup does not put the Ragionex Memory rule there alone`,
+        `write the identity ${name} should have into that file, then run this again (AI agents: ask the user what it should say)`,
+        rerun(),
+        located,
+      );
+    }
   } else {
     // Both files, and the entry in the MCP settings file, come before a link.
     const owner = choice.agent ? `${choice.agent.displayName}'s` : "your agent's";
@@ -1723,6 +1869,10 @@ async function runInstall(argv: string[]): Promise<number> {
           "When the user pastes the one-time code from that page, run this yourself with it; there is no need to show it to the user:\n" +
           `  ${rerun(shown.link, "<code>")}`,
       );
+      // An agent's terminal shows a command's output only when it ends, so the coming wait is announced now.
+      if (!choice.manual && choice.agent.releaseMs && isRegistered(choice.agent, cli, readOrEmpty(choice.agent.configFile)) === true) {
+        console.log(`AI agents: the next step takes about 2 minutes. This is how ${name} works: it keeps its connections running in the background and needs that time to let go of the old Ragionex Memory connection. Tell the user this before you run it, so they know it is not stuck, and give the command a time limit of at least 5 minutes.`);
+      }
       return 0;
     }
     link = shown.link;
@@ -1816,7 +1966,8 @@ async function runInstall(argv: string[]): Promise<number> {
   if (!interactive) {
     console.log("AI agents: the setup just added the Ragionex Memory rule to your global instructions file, so it may now appear in this conversation. It is already in place and takes effect in the new session.\n");
   }
-  console.log(`Ragionex Memory is ready: ${name} is connected.\n\nQuit ${name} completely and open it again in a new session, so Ragionex Memory loads. From then on it works on its own.`);
+  const loads = (!choice.manual && choice.agent.newSession?.install) || `Quit ${name} completely and open it again in a new session`;
+  console.log(`Ragionex Memory is ready: ${name} is connected.\n\n${loads}, so Ragionex Memory loads. From then on it works on its own.`);
   return 0;
 }
 
@@ -1839,24 +1990,44 @@ async function runUninstall(argv: string[]): Promise<number> {
 
   let failed = 0;
   if (!choice.manual) {
-    const agent = choice.agent;
-    const unregistered = await unregister(agent);
-    if (!unregistered) failed++;
-
-    const removed = await removeBlock(agent.rulesFile);
-    if (typeof removed === "object") {
-      console.error(`${agent.displayName}: ${removed.error}.`);
-      failed++;
-    } else if (removed === "modified-markers") {
-      console.log(
-        `${agent.displayName}: priority-rule markers were edited, so the block was left in place.`,
-      );
+    // An agent whose active profile moves its files is changed only where its own CLI names them.
+    let located: AgentTarget | string = choice.agent;
+    if (choice.agent.locate) {
+      const found = agentCli(choice.agent);
+      located = found === null ? `\`${choice.agent.cli}\` is not on your PATH` : choice.agent.locate(found.command);
     }
+    if (typeof located === "string") {
+      console.error(`${choice.agent.displayName}: ${located}, so nothing was changed. Run this again in a terminal where \`${choice.agent.cli}\` works.`);
+      failed++;
+    } else {
+      const agent = located;
+      // Read before the removal: an entry that was there, or may have been, is waited for once it is gone.
+      const held = agent.releaseMs !== undefined
+        && isRegistered(agent, agentCli(agent)?.command ?? null, readOrEmpty(agent.configFile)) !== false;
+      const unregistered = await unregister(agent);
+      if (!unregistered) failed++;
 
-    if (unregistered && (removed === "removed" || removed === "absent")) {
-      console.log(
-        `Ragionex Memory is removed from ${agent.displayName}: its MCP server${removed === "removed" ? " and its rule in the global instructions file" : ""}.\n\nRestart ${agent.displayName} (quit completely and open again) to finish. Its key stays in your account; revoke it at ${KEYS_PAGE} if you do not plan to reconnect.`,
-      );
+      const removed = await removeBlock(agent.rulesFile);
+      if (typeof removed === "object") {
+        console.error(`${agent.displayName}: ${removed.error}.`);
+        failed++;
+      } else if (removed === "modified-markers") {
+        console.log(
+          `${agent.displayName}: priority-rule markers were edited, so the block was left in place.`,
+        );
+      }
+
+      // Everything is removed before the wait, so a run stopped during it leaves nothing half done.
+      if (held && unregistered) {
+        console.log(`${agent.displayName} keeps its connections running in the background, so it needs about 2 minutes to let go of the Ragionex Memory connection. The setup waits until then.`);
+        await new Promise<void>((resolve) => setTimeout(resolve, agent.releaseMs));
+      }
+
+      if (unregistered && (removed === "removed" || removed === "absent")) {
+        console.log(
+          `Ragionex Memory is removed from ${agent.displayName}: its MCP server${removed === "removed" ? " and its rule in the global instructions file" : ""}.\n\n${agent.newSession?.uninstall ?? `Restart ${agent.displayName} (quit completely and open again)`} to finish. Its key stays in your account; revoke it at ${KEYS_PAGE} if you do not plan to reconnect.`,
+        );
+      }
     }
   } else {
     // The setup does not know the format of this agent's MCP settings, so it removes only the

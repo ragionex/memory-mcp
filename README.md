@@ -211,16 +211,16 @@ Every record has `id`, `vault_id`, `content`, `created_at`, `updated_at`, `statu
 | Setting | Details |
 |---|---|
 | `RAGIONEX_MEMORY_API_KEY` | The agent's key. `install` creates it after you approve the connection in your browser and stores it in the agent's MCP registration |
-| `RAGIONEX_MEMORY_INSTRUCTIONS_FILE` | Manual setup only. The full path of the agent's global instructions file; the setup fills it in, and the memory rule in that file refreshes itself |
+| `RAGIONEX_MEMORY_INSTRUCTIONS_FILE` | Manual setup and Hermes Agent. The full path of the agent's global instructions file; the setup fills it in, and the memory rule in that file refreshes itself |
 | `RAGIONEX_API_BASE` | Optional API address, default `https://api.ragionex.com` |
-| Relocated Agent Homes | `install` and `uninstall` follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `XDG_CONFIG_HOME` |
+| Relocated Agent Homes | `install` and `uninstall` follow `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `XDG_CONFIG_HOME`, and Hermes Agent's active profile |
 | Tool Timeout | Allow each MCP tool call more than 120 seconds, the connector's own request deadline, so a slow request still ends with its result or clear guidance |
 | Windows | In WSL, run the setup inside the Linux environment where the agent runs |
 | Diagnostics | The server writes to stderr; see your client's MCP server log |
 
 - **Project Folder.** The folder the agent reports: Claude Code's project directory, the client's single workspace root, or the folder the server started in.
 - **Updating.** Nothing to do: the agent starts the latest version each time it launches, and the rule refreshes itself.
-- **The Memory Rule.** It lives between `ragionex-memory-mcp:priority-rule` markers in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` or `~/.config/opencode/AGENTS.md`, or in the file manual setup was given, and refreshes itself after an upgrade. To keep your own version, edit the begin marker and the server leaves the block alone. See the [Memory Rule Guide](https://ragionex.com/docs/guides/config-rule).
+- **The Memory Rule.** It lives between `ragionex-memory-mcp:priority-rule` markers in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md` or Hermes Agent's `SOUL.md`, or in the file manual setup was given, and refreshes itself after an upgrade. To keep your own version, edit the begin marker and the server leaves the block alone. See the [Memory Rule Guide](https://ragionex.com/docs/guides/config-rule).
 - **Uninstalling.** Run the command for your system. On Windows:
 
   ```bash

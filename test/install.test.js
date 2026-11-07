@@ -134,9 +134,10 @@ test("uninstall without an agent code prints the menu with its flags and reports
     "  1) Claude Code",
     "  2) Codex",
     "  3) OpenCode",
-    "  4) My agent is not in the list (manual setup)",
+    "  4) Hermes Agent",
+    "  5) My agent is not in the list (manual setup)",
     "",
-    "AI agents: run this again with your own agent code (claude-code, codex, opencode), or with --manual if you are not in the list:",
+    "AI agents: run this again with your own agent code (claude-code, codex, opencode, hermes), or with --manual if you are not in the list:",
     `  ${COMMAND} uninstall --agent-mode --agent <code>`,
     "",
   ].join("\n"));

@@ -164,11 +164,91 @@ function claudeCodeCopies(home) {
     copies.sort((a, b) => b.version.localeCompare(a.version, "en", { numeric: true }));
     return [path.join(home, ".local", "bin", program), ...copies.map((copy) => copy.file)];
 }
+function hermesEntryPresent(content) {
+    const lines = content.replace(/^\uFEFF/, "").split(/\r?\n/);
+    const keyOf = (name) => new RegExp(`^(?:${name}|"${name}"|'${name}')[ \\t]*:(?:[ \\t]|$)`);
+    const sections = lines.flatMap((line, i) => (keyOf("mcp_servers").test(line) ? [i] : []));
+    if (sections.length === 0)
+        return false;
+    if (sections.length > 1)
+        throw new Error("mcp_servers is set more than once");
+    const head = lines[sections[0]];
+    const value = head.slice(head.indexOf(":") + 1).replace(/(?:^|[ \t])#.*$/, "").trim();
+    if (/^(?:\{\s*\}|~|null|Null|NULL)$/.test(value))
+        return false;
+    if (value !== "")
+        throw new Error("mcp_servers is not written as a block");
+    const entry = keyOf(SERVER_NAME);
+    let indent = 0;
+    let found = false;
+    for (const line of lines.slice(sections[0] + 1)) {
+        const text = line.trimStart();
+        if (text === "" || text.startsWith("#"))
+            continue;
+        const depth = line.length - text.length;
+        if (depth === 0)
+            break;
+        indent ||= depth;
+        if (depth > indent)
+            continue;
+        if (depth < indent || /^-(?:[ \t]|$)/.test(text))
+            throw new Error("mcp_servers is not a map");
+        if (entry.test(text)) {
+            if (found)
+                throw new Error(`"${SERVER_NAME}" is set more than once`);
+            found = true;
+        }
+    }
+    return found;
+}
+function hermesAgent(home) {
+    const rulesFile = path.join(home, "SOUL.md");
+    const [command, ...launch] = SERVER_COMMAND;
+    return {
+        key: "hermes",
+        displayName: "Hermes Agent",
+        responseBudgetBytes: 30_000,
+        folderSource: "unavailable",
+        footprint: home,
+        rulesFile,
+        configFile: path.join(home, "config.yaml"),
+        cli: "hermes",
+        addArgs: (env) => [
+            "mcp", "add", SERVER_NAME, "--command", command,
+            "--env", ...env, `RAGIONEX_MEMORY_INSTRUCTIONS_FILE=${rulesFile}`,
+            "--args", ...launch,
+        ],
+        addInput: "\n",
+        removeArgs: ["mcp", "remove", SERVER_NAME],
+        registrationPresent: hermesEntryPresent,
+        removeBeforeAdd: true,
+        releaseMs: 130_000,
+        locate: (cli) => {
+            const shown = runCli(cli, ["config", "path"]);
+            const file = shown.ok
+                ? shown.detail.split(/\r?\n/).map((line) => line.trim()).reverse()
+                    .find((line) => path.isAbsolute(line) && path.basename(line) === "config.yaml")
+                : undefined;
+            return file === undefined
+                ? `\`hermes config path\` did not show where its settings are (${cliOutput(shown.detail)})`
+                : hermesAgent(path.dirname(file));
+        },
+        identityFile: true,
+        newSession: {
+            install: "Hermes Agent starts new connections in the background within about 2 minutes. After that, start a new Hermes Agent session (type /new)",
+            uninstall: "Start a new Hermes Agent session (type /new)",
+        },
+        enabled: true,
+    };
+}
 function agentRegistry() {
     const home = os.homedir();
     const claudeHome = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"));
     const codexHome = path.resolve(process.env.CODEX_HOME || path.join(home, ".codex"));
     const openCodeDir = path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "opencode");
+    const hermesHome = path.resolve(process.env.HERMES_HOME || (process.platform === "win32"
+        ? path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "hermes")
+        : path.join(home, ".hermes")));
     return [
         {
             key: "claude-code",
@@ -265,6 +345,7 @@ function agentRegistry() {
             },
             enabled: true,
         },
+        hermesAgent(hermesHome),
     ];
 }
 function enabledAgents() {
@@ -714,18 +795,21 @@ async function removeBlock(target) {
     }
     return "removed";
 }
-function runCli(cli, args) {
+function runCli(cli, args, input) {
     const shell = process.platform === "win32" && !path.isAbsolute(cli);
     const quoted = shell ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
+    const stdio = [input === undefined ? "ignore" : "pipe", "pipe", "pipe"];
     const r = shell
         ? spawnSync([cli, ...quoted].join(" "), {
-            stdio: ["ignore", "pipe", "pipe"],
+            stdio,
+            input,
             encoding: "utf-8",
             timeout: 60_000,
             shell: true,
         })
         : spawnSync(cli, args, {
-            stdio: ["ignore", "pipe", "pipe"],
+            stdio,
+            input,
             encoding: "utf-8",
             timeout: 60_000,
             shell: false,
@@ -792,7 +876,7 @@ function isRegistered(agent, cli, content) {
         return `the Ragionex entry in ${agent.configFile} could not be read (${errMsg(err)})`;
     }
 }
-function register(agent, cli, apiKey, apiBase) {
+async function register(agent, cli, apiKey, apiBase) {
     let original;
     try {
         original = fs.readFileSync(agent.configFile);
@@ -837,12 +921,19 @@ function register(agent, cli, apiKey, apiBase) {
     };
     if (present && agent.removeArgs) {
         const removed = runCli(cli, agent.removeArgs);
-        if (!removed.ok)
+        if (!removed.ok && agent.addInput === undefined) {
             return settle(`its old Ragionex entry could not be removed (${cliOutput(removed.detail)})`);
+        }
+        const release = agent.releaseMs;
+        if (release) {
+            console.log(`${agent.displayName} keeps its connections running in the background, so it needs about 2 minutes to let go of the old Ragionex Memory connection. The setup waits, then adds the new one.`);
+            await new Promise((resolve) => setTimeout(resolve, release));
+        }
     }
-    const added = runCli(cli, agent.addArgs(serverEnv(agent, apiKey, apiBase)));
-    if (!added.ok)
+    const added = runCli(cli, agent.addArgs(serverEnv(agent, apiKey, apiBase)), agent.addInput);
+    if (!added.ok && agent.addInput === undefined) {
         return settle(`the Ragionex entry could not be added (${cliOutput(added.detail)})`);
+    }
     let written = null;
     try {
         written = fs.readFileSync(agent.configFile, "utf-8");
@@ -1031,18 +1122,21 @@ async function unregister(agent) {
         : `${agent.displayName}: the edited config did not load (${cliOutput(loaded.detail)}), so it was restored. Remove the "${SERVER_NAME}" entry from ${agent.configFile} by hand.`);
     return false;
 }
+function launchingAgent(client) {
+    return agentRegistry().find((agent) => agent.enabled && agent.clientId !== undefined && agent.clientId === client?.name);
+}
 export function agentKeyForClient(client) {
-    return agentRegistry().find((a) => a.enabled && a.clientId === client?.name)?.key;
+    return launchingAgent(client)?.key;
 }
 export function responseBudgetForClient(client) {
-    return agentRegistry().find((agent) => agent.enabled && agent.clientId === client?.name)?.responseBudgetBytes ?? 30_000;
+    return launchingAgent(client)?.responseBudgetBytes ?? 30_000;
 }
 export function folderSourceForClient(client) {
-    return agentRegistry().find((agent) => agent.enabled && agent.clientId === client?.name)?.folderSource ?? "unavailable";
+    return launchingAgent(client)?.folderSource ?? "unavailable";
 }
 export async function refreshForClient(client) {
     try {
-        const agent = agentRegistry().find((a) => a.enabled && a.clientId === client?.name);
+        const agent = launchingAgent(client);
         const manualFile = process.env.RAGIONEX_MEMORY_INSTRUCTIONS_FILE;
         const rulesFile = manualFile || agent?.rulesFile;
         if (!rulesFile) {
@@ -1210,7 +1304,7 @@ async function installRule(target, notes) {
     return null;
 }
 async function connectAgent(agent, cli, issued, keyLabel, apiBase, notes) {
-    const problem = register(agent, cli, issued.key, apiBase);
+    const problem = await register(agent, cli, issued.key, apiBase);
     if (problem !== null) {
         return {
             cause: "Ragionex Memory could not be added to its MCP settings",
@@ -1227,7 +1321,7 @@ async function runInstall(argv) {
     const args = parseArgs(argv, "install");
     const apiBase = normalizeApiBase(process.env.RAGIONEX_API_BASE ?? DEFAULT_API_BASE);
     const { interactive, setup } = args;
-    const choice = await chooseAgent(args, "install");
+    let choice = await chooseAgent(args, "install");
     if (choice === null)
         return 0;
     const name = choice.agent?.displayName ?? "your agent";
@@ -1280,6 +1374,13 @@ async function runInstall(argv) {
         if (found.origin)
             console.log(`${found.origin}.`);
         cli = found.command;
+        const located = choice.agent.locate?.(cli) ?? choice.agent;
+        if (typeof located === "string")
+            return fallback(choice.agent, setup, located);
+        choice = { agent: located, manual: false };
+        if (located.identityFile && !readOrEmpty(located.rulesFile).trim()) {
+            return notReady(`${located.rulesFile} is missing or empty. ${name} takes its identity from this file, so the setup does not put the Ragionex Memory rule there alone`, `write the identity ${name} should have into that file, then run this again (AI agents: ask the user what it should say)`, rerun(), located);
+        }
     }
     else {
         const owner = choice.agent ? `${choice.agent.displayName}'s` : "your agent's";
@@ -1340,6 +1441,9 @@ async function runInstall(argv) {
             console.log("AI agents: give the user this link to open in their own browser, and never open it yourself.\n" +
                 "When the user pastes the one-time code from that page, run this yourself with it; there is no need to show it to the user:\n" +
                 `  ${rerun(shown.link, "<code>")}`);
+            if (!choice.manual && choice.agent.releaseMs && isRegistered(choice.agent, cli, readOrEmpty(choice.agent.configFile)) === true) {
+                console.log(`AI agents: the next step takes about 2 minutes. This is how ${name} works: it keeps its connections running in the background and needs that time to let go of the old Ragionex Memory connection. Tell the user this before you run it, so they know it is not stuck, and give the command a time limit of at least 5 minutes.`);
+            }
             return 0;
         }
         link = shown.link;
@@ -1426,7 +1530,8 @@ async function runInstall(argv) {
     if (!interactive) {
         console.log("AI agents: the setup just added the Ragionex Memory rule to your global instructions file, so it may now appear in this conversation. It is already in place and takes effect in the new session.\n");
     }
-    console.log(`Ragionex Memory is ready: ${name} is connected.\n\nQuit ${name} completely and open it again in a new session, so Ragionex Memory loads. From then on it works on its own.`);
+    const loads = (!choice.manual && choice.agent.newSession?.install) || `Quit ${name} completely and open it again in a new session`;
+    console.log(`Ragionex Memory is ready: ${name} is connected.\n\n${loads}, so Ragionex Memory loads. From then on it works on its own.`);
     return 0;
 }
 function readOrEmpty(target) {
@@ -1444,20 +1549,37 @@ async function runUninstall(argv) {
         return 0;
     let failed = 0;
     if (!choice.manual) {
-        const agent = choice.agent;
-        const unregistered = await unregister(agent);
-        if (!unregistered)
-            failed++;
-        const removed = await removeBlock(agent.rulesFile);
-        if (typeof removed === "object") {
-            console.error(`${agent.displayName}: ${removed.error}.`);
+        let located = choice.agent;
+        if (choice.agent.locate) {
+            const found = agentCli(choice.agent);
+            located = found === null ? `\`${choice.agent.cli}\` is not on your PATH` : choice.agent.locate(found.command);
+        }
+        if (typeof located === "string") {
+            console.error(`${choice.agent.displayName}: ${located}, so nothing was changed. Run this again in a terminal where \`${choice.agent.cli}\` works.`);
             failed++;
         }
-        else if (removed === "modified-markers") {
-            console.log(`${agent.displayName}: priority-rule markers were edited, so the block was left in place.`);
-        }
-        if (unregistered && (removed === "removed" || removed === "absent")) {
-            console.log(`Ragionex Memory is removed from ${agent.displayName}: its MCP server${removed === "removed" ? " and its rule in the global instructions file" : ""}.\n\nRestart ${agent.displayName} (quit completely and open again) to finish. Its key stays in your account; revoke it at ${KEYS_PAGE} if you do not plan to reconnect.`);
+        else {
+            const agent = located;
+            const held = agent.releaseMs !== undefined
+                && isRegistered(agent, agentCli(agent)?.command ?? null, readOrEmpty(agent.configFile)) !== false;
+            const unregistered = await unregister(agent);
+            if (!unregistered)
+                failed++;
+            const removed = await removeBlock(agent.rulesFile);
+            if (typeof removed === "object") {
+                console.error(`${agent.displayName}: ${removed.error}.`);
+                failed++;
+            }
+            else if (removed === "modified-markers") {
+                console.log(`${agent.displayName}: priority-rule markers were edited, so the block was left in place.`);
+            }
+            if (held && unregistered) {
+                console.log(`${agent.displayName} keeps its connections running in the background, so it needs about 2 minutes to let go of the Ragionex Memory connection. The setup waits until then.`);
+                await new Promise((resolve) => setTimeout(resolve, agent.releaseMs));
+            }
+            if (unregistered && (removed === "removed" || removed === "absent")) {
+                console.log(`Ragionex Memory is removed from ${agent.displayName}: its MCP server${removed === "removed" ? " and its rule in the global instructions file" : ""}.\n\n${agent.newSession?.uninstall ?? `Restart ${agent.displayName} (quit completely and open again)`} to finish. Its key stays in your account; revoke it at ${KEYS_PAGE} if you do not plan to reconnect.`);
+            }
         }
     }
     else {

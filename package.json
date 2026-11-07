@@ -12,7 +12,8 @@
     "ai-agents",
     "claude-code",
     "codex",
-    "opencode"
+    "opencode",
+    "hermes-agent"
   ],
   "license": "MIT",
   "homepage": "https://ragionex.com",
