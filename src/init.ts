@@ -1092,6 +1092,9 @@ function runCli(cli: string, args: string[], input?: string): CliResult {
         encoding: "utf-8",
         timeout: 60_000,
         shell: true,
+        // cmd.exe looks for a bare name in the current folder before PATH unless this is set,
+        // so a file named like the agent's CLI in the project would run instead of the agent.
+        env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
       })
     : spawnSync(cli, args, {
         stdio,
@@ -1127,8 +1130,8 @@ function agentCli(agent: AgentTarget): FoundCli | null {
   if (running) return { command: running, origin: `Using the ${agent.displayName} that runs this setup: ${running}` };
   const windows = process.platform === "win32";
   const extensions = windows ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-  // cmd.exe looks in the current folder before PATH.
-  const folders = [...(windows ? [process.cwd()] : []), ...(process.env.PATH ?? "").split(path.delimiter)]
+  // Like runCli's cmd.exe calls, search the current folder only when PATH lists it.
+  const folders = (process.env.PATH ?? "").split(path.delimiter)
     .map((folder) => folder.replace(/^"(.*)"$/, "$1"))
     .filter((folder) => folder !== "");
   if (folders.some((folder) => extensions.some((extension) => runnable(path.join(folder, agent.cli + extension))))) {

@@ -806,6 +806,7 @@ function runCli(cli, args, input) {
             encoding: "utf-8",
             timeout: 60_000,
             shell: true,
+            env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
         })
         : spawnSync(cli, args, {
             stdio,
@@ -836,7 +837,7 @@ function agentCli(agent) {
         return { command: running, origin: `Using the ${agent.displayName} that runs this setup: ${running}` };
     const windows = process.platform === "win32";
     const extensions = windows ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-    const folders = [...(windows ? [process.cwd()] : []), ...(process.env.PATH ?? "").split(path.delimiter)]
+    const folders = (process.env.PATH ?? "").split(path.delimiter)
         .map((folder) => folder.replace(/^"(.*)"$/, "$1"))
         .filter((folder) => folder !== "");
     if (folders.some((folder) => extensions.some((extension) => runnable(path.join(folder, agent.cli + extension))))) {
