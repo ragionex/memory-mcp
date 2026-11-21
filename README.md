@@ -223,14 +223,6 @@ A new account starts with **My vault** as its default, and every project without
 - Keys are created with fixed permissions and revoked in the [Dashboard](https://app.ragionex.com/keys).
 - The setup creates one key per agent, named after the agent and the setup date. Running it again creates another key; earlier keys stay listed in the [Dashboard](https://app.ragionex.com/keys), where you can revoke them.
 
-## Free Plan
-
-| Requests | Memory Size | Stored Memories | Vaults | Keys | Teammates |
-|:---:|:---:|:---:|:---:|:---:|:---:|
-| 10,000 per 30 days | 10,000 characters | Unlimited | 2 | 100 | 1 per Vault |
-
-Saving, editing and restoring a memory each cost 1 request, and so does each search page fetched from the service. Browsing, viewing, deleting, the trash, version history, status checks and export are free. Free is for personal projects and evaluation and is in early access, so its limits may change. Commercial use is not permitted on Free; [Pro](https://ragionex.com/pricing) is coming soon.
-
 ## Reference
 
 <details>
